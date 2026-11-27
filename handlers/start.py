@@ -43,7 +43,8 @@ async def handle_start(message: Message, command: CommandObject, bot: Bot, state
                 chat_id=db_user.referrer_id,
                 text=(
                     "✨ <b>Твоя подруга приєдналася до Velara!</b>\n\n"
-                    "Тобі автоматично нараховано <b>+1 безкоштовний розклад Таро</b> 🌙"
+                    "Тобі автоматично нараховано <b>+1 безкоштовний розклад Таро</b> 🌙 "
+                    "та <b>+1 перевірку сумісності</b> ✨"
                 ),
                 parse_mode="HTML"
             )
@@ -54,7 +55,7 @@ async def handle_start(message: Message, command: CommandObject, bot: Bot, state
         "🕯 <b>Простір Velara</b>\n\n"
         "Тут немає фальшивих обіцянок чи магічних ілюзій. "
         "Тільки твереза психологія стосунків, точні Аркани та погляд у суть речей.\n\n"
-        "✦ Тобі нараховано <b>1 безкоштовний розклад</b> для знайомства.\n\n"
+        "✦ Тобі нараховано <b>1 безкоштовний розклад Таро</b> та <b>1 аналіз сумісності</b> для знайомства.\n\n"
         "Обери, з чого почнемо сьогодні:"
     )
 
@@ -102,13 +103,15 @@ async def handle_profile(callback: CallbackQuery, bot: Bot):
 
     text = (
         "👤 <b>Твій особистий простір</b>\n\n"
-        f"Баланс розкладів Таро: <b>{db_user.total_tarot_credits}</b> "
+        f"🌙 <b>Баланс Таро:</b> {db_user.total_tarot_credits} "
         f"(вільних: {db_user.free_tarot_credits}, придбаних: {db_user.paid_tarot_credits})\n"
-        f"Запрошено подруг: <b>{ref_info['invited_count']}</b>\n\n"
+        f"✨ <b>Баланс сумісності:</b> {db_user.total_compat_credits} "
+        f"(вільних: {db_user.free_compat_credits}, придбаних: {db_user.paid_compat_credits})\n"
+        f"👥 <b>Запрошено подруг:</b> {ref_info['invited_count']}\n\n"
         "✦ <b>Твоє посилання для запрошення:</b>\n"
         f"<code>{ref_link}</code>\n\n"
-        "<i>За кожну подругу, яка вперше відкриє бота за твоїм посиланням, "
-        "ти миттєво отримуєш +1 безкоштовний розклад Таро.</i>"
+        "<i>За кожну подругу, яка вперше приєднається за твоїм посиланням, "
+        "ти отримуєш +1 розклад Таро та +1 перевірку сумісності безкоштовно.</i>"
     )
 
     if callback.message:

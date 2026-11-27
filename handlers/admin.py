@@ -1,11 +1,14 @@
 import io
 import csv
 import html
-from aiogram import Router
+import logging
+from aiogram import Router, Bot
 from aiogram.types import Message, BufferedInputFile
 from aiogram.filters import Command, Filter
 from config import settings
 from database.repository import UserRepository
+
+logger = logging.getLogger("handlers.admin")
 
 
 class AdminFilter(Filter):
@@ -73,29 +76,84 @@ async def handle_admin_dashboard(message: Message):
     else:
         utm_text = "\n\n".join(utm_lines)
 
-    footer = "\n━━━━━━━━━━━━━━━━━━━━━\n💡 <i>Для вивантаження бази використовуй /export</i>"
+    footer = (
+        "\n━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <i>Команди адміна:</i>\n"
+        "• <code>/export</code> — вивантаження бази лідів у CSV\n"
+        "• <code>/refund &lt;user_id&gt; &lt;charge_id&gt;</code> — повернення платежу Stars"
+    )
     await message.answer(f"{header_block}{utm_text}{footer}", parse_mode="HTML")
 
 
 @router.message(Command("export"))
 async def handle_export_users(message: Message):
-    """Вивантаження списку лідів у CSV."""
-    import aiosqlite
-    async with aiosqlite.connect(settings.DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users ORDER BY first_seen DESC") as cur:
-            rows = await cur.fetchall()
+    """Вивантаження списку лідів у CSV (працює однаково для SQLite та PostgreSQL)."""
+    rows = await UserRepository.get_all_users()
 
     if not rows:
         await message.answer("У базі поки немає користувачів.")
         return
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
     writer.writeheader()
     for r in rows:
         writer.writerow(dict(r))
 
     csv_bytes = output.getvalue().encode("utf-8-sig")
     doc = BufferedInputFile(csv_bytes, filename="velara_leads.csv")
-    await message.answer_document(document=doc, caption=f"📁 База користувачів: {len(rows)} рядків.")
+    await message.answer_document(
+        document=doc,
+        caption=f"📁 Експорт бази користувачів ({len(rows)} записів)"
+    )
+
+
+@router.message(Command("refund"))
+async def handle_refund(message: Message, bot: Bot):
+    """
+    Повернення платежу Telegram Stars:
+    /refund <user_id> <telegram_payment_charge_id>
+    """
+    parts = message.text.strip().split()
+    if len(parts) < 3:
+        await message.answer(
+            "⚠️ <b>Формат команди:</b>\n"
+            "<code>/refund &lt;user_id&gt; &lt;telegram_payment_charge_id&gt;</code>\n\n"
+            "<i>Знайти charge_id можна у вивантаженні /export або у списку платежів.</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        target_user_id = int(parts[1])
+        charge_id = parts[2].strip()
+    except ValueError:
+        await message.answer("❌ Помилка: user_id має бути цілим числом.")
+        return
+
+    try:
+        res = await bot.refund_star_payment(
+            user_id=target_user_id,
+            telegram_payment_charge_id=charge_id
+        )
+        if res:
+            await UserRepository.record_event(
+                target_user_id,
+                "payment_refunded",
+                f"charge_id:{charge_id}"
+            )
+            await message.answer(
+                f"✅ <b>Платіж успішно повернуто!</b>\n\n"
+                f"• User ID: <code>{target_user_id}</code>\n"
+                f"• Charge ID: <code>{charge_id}</code>\n"
+                "Зірки (Stars) повернено на баланс користувача.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("❌ Telegram повернув статус False при спробі повернення платежу.")
+    except Exception as e:
+        logger.error(f"Помилка повернення платежу Stars: {e}", exc_info=True)
+        await message.answer(
+            f"❌ <b>Помилка під час повернення:</b>\n<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML"
+        )

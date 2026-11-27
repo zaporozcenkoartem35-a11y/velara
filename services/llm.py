@@ -72,7 +72,7 @@ class LLMService:
 
     async def _call_llm(self, system_prompt: str, user_prompt: str, fallback_func) -> str:
         if not self.is_configured:
-            logger.warning("LLM API_KEY не налаштовано в .env. Використовується евристичний фоллбек.")
+            logger.warning("LLM API_KEY не налаштовано в .env. Використовується якісний евристичний фоллбек.")
             return fallback_func()
 
         try:
@@ -83,7 +83,8 @@ class LLMService:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=settings.LLM_TEMPERATURE,
-                max_tokens=900
+                max_tokens=settings.LLM_MAX_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS
             )
             raw_text = response.choices[0].message.content or ""
             clean_text = sanitize_telegram_html(raw_text)
@@ -98,29 +99,25 @@ class LLMService:
     async def generate_tarot_reading(self, situation: str, cards: List[DrawnCard]) -> str:
         cards_str_list = []
         for i, c in enumerate(cards, start=1):
-            cards_str_list.append(
-                f"{i}. Позиція: {c.position_title}\n"
-                f"   Карта: {c.display_name} ({c.suit})\n"
-                f"   Ключові сенси: {c.keywords}"
-            )
-        cards_info = "\n\n".join(cards_str_list)
+            pos = "перевернуте" if c.is_reversed else "пряме"
+            cards_str_list.append(f"{i}. {c.name_ukr} ({pos} положення) — {c.meaning_upright if not c.is_reversed else c.meaning_reversed}")
+        cards_str = "\n".join(cards_str_list)
+
+        user_prompt = build_tarot_user_prompt(situation, cards_str)
 
         def fallback() -> str:
             c1, c2, c3 = cards[0], cards[1], cards[2]
             return (
-                f"<b>Суть</b>\n"
-                f"У твоїй ситуації зараз випала карта <b>{c1.display_name}</b>. "
-                f"Це показує, що зовнішня картинка значно простіша за твої внутрішні переживання. "
-                f"Зараз немає сенсу додумувати за людину її мотиви — дивись виключно на реальні вчинки.\n\n"
-                f"<b>Що приховано</b>\n"
-                f"Карта <b>{c2.display_name}</b> розкриває приховане: між вами є недомовленість або страх здатися вразливим. "
-                f"Партнер займає позицію вичікування, бо боїться втратити контроль над ситуацією.\n\n"
-                f"<b>Що робити</b>\n"
-                f"Вектор задає карта <b>{c3.display_name}</b>: зроби крок назад у власний спокій. "
-                f"Не випитуй і не тисни. Чітка внутрішня опора зараз спрацює у рази сильніше, ніж спроби витягнути пояснення силою."
+                f"✦ <b>Аналіз твоєї ситуації:</b>\n\n"
+                f"<b>{c1.name_ukr}</b> ({c1.position_title}) вказує на внутрішній стан та імпульс, з якого почалася динаміка. "
+                f"{c1.meaning_upright if not c1.is_reversed else c1.meaning_reversed}.\n\n"
+                f"<b>{c2.name_ukr}</b> ({c2.position_title}) висвітлює ключову напругу між вами. "
+                f"{c2.meaning_upright if not c2.is_reversed else c2.meaning_reversed}.\n\n"
+                f"<b>{c3.name_ukr}</b> ({c3.position_title}) спрямовує вектор у найближчу перспективу: "
+                f"{c3.meaning_upright if not c3.is_reversed else c3.meaning_reversed}.\n\n"
+                f"<blockquote>Порада: не намагайся форсувати відповідь партнера через тиск. Залиш простір для прояву і спостерігай за реальними діями, а не словами.</blockquote>"
             )
 
-        user_prompt = build_tarot_user_prompt(situation, cards_info)
         return await self._call_llm(TAROT_SYSTEM_PROMPT, user_prompt, fallback)
 
     # --- 2. Сумісність ---
@@ -134,78 +131,66 @@ class LLMService:
         partner_arcana_name: str,
         pair_arcana_name: str
     ) -> str:
-        def fallback() -> str:
-            return (
-                f"<b>Де іскра</b>\n"
-                f"Поєднання Арканів «{user_arcana_name}» та «{partner_arcana_name}» дає сильне перше тяжіння. "
-                f"Вас тягне одне до одного на контрасті: те, чого не вистачає одному, є з надлишком в іншого. "
-                f"Спільний Аркан союзу «{pair_arcana_name}» говорить про те, що ця зустріч відчувається як щось неминуче.\n\n"
-                f"<b>Головні граблі</b>\n"
-                f"Основний камінь спотикання — різні швидкості та способи переживати стрес. "
-                f"Коли виникає непорозуміння, один прагне з'ясувати все негайно, а інший закривається в панцир. "
-                f"Якщо сприймати мовчання як нелюбов — почнеться руйнівна гра в образу.\n\n"
-                f"<b>Реальний прогноз</b>\n"
-                f"Цей союз житиме довго лише за умови прямої дорослої розмови без натяків. "
-                f"Перестаньте виховувати одне одного. Тут потрібна домовленість про особисті кордони, а не злиття в одне ціле.\n\n"
-                f"✦ @Velara_bot"
-            )
-
         user_prompt = build_compatibility_user_prompt(
             user_name, user_birth, user_arcana_name,
             partner_name, partner_birth, partner_arcana_name,
             pair_arcana_name
         )
+
+        def fallback() -> str:
+            return (
+                f"✦ <b>Динаміка пари {user_name} та {partner_name}:</b>\n\n"
+                f"Твій Аркан ({user_arcana_name}) прагне глибини, ясності та внутрішньої опори, "
+                f"тоді як Аркан партнера ({partner_arcana_name}) проявляє іншу швидкість сприйняття та реакцій.\n\n"
+                f"Спільний Аркан союзу ({pair_arcana_name}) показує, що головний урок цих стосунків — "
+                f"навчитися домовлятися на рівних, не намагаючись перевиховати іншого під власні очікування.\n\n"
+                f"<blockquote>У цій парі сильне взаємне тяжіння, але воно потребує зрілості: тригери виникають там, де накопичуються невисловлені образи. Чесний спокійний діалог знімає напругу.</blockquote>"
+            )
+
         return await self._call_llm(COMPATIBILITY_SYSTEM_PROMPT, user_prompt, fallback)
 
-    # --- 3. Базовий Аркан ---
+    # --- 3. Аркан долі (Безкоштовний портрет) ---
     async def generate_arcana_portrait(
         self,
         birth_date: str,
         base_arcana_name: str,
         soul_arcana_name: str
     ) -> str:
+        user_prompt = build_arcana_free_user_prompt(birth_date, base_arcana_name, soul_arcana_name)
+
         def fallback() -> str:
             return (
-                f"<b>Твоя сила</b>\n"
-                f"Твій провідний архетип — <b>{base_arcana_name}</b>. Твоя сила в умінні тримати внутрішній стрижень, "
-                f"коли навколо все хитається. Ти інтуїтивно відчуваєш фальш за перші кілька секунд спілкування, "
-                f"а Аркан душі <b>{soul_arcana_name}</b> додає рідкісну глибину почуттів і вміння любити по-справжньому.\n\n"
-                f"<b>Твоя пастка</b>\n"
-                f"Ти схильна виправдовувати холодність інших своєю 'терплячістю'. "
-                f"Коли людина дає тобі мінімум — ти починаєш шукати причину в собі, застрягаючи в очікуванні, "
-                f"що він колись оцінить твою вірність.\n\n"
-                f"<b>Чесний фокус</b>\n"
-                f"Перестань бути рятувальницею для тих, хто не просив про допомогу. "
-                f"Твоя цінність не вимірюється тим, скільки болю ти змогла витримати в стосунках."
+                f"✦ <b>Твій характер і сила:</b>\n"
+                f"Базовий Аркан {base_arcana_name} наділяє тебе природним відчуттям кордонів, проникливістю та вмінням бачити справжню мотивацію людей.\n\n"
+                f"✦ <b>Твої почуття та тіньова сторона:</b>\n"
+                f"Аркан душі {soul_arcana_name} вказує на тонку чутливість до фальші. У стресі може з'являтися бажання закритися в собі або контролювати все довкола.\n\n"
+                f"<blockquote>Твоя точка сили — у довірі до власної інтуїції. Коли ти не зраджуєш себе заради чужого схвалення, стосунки навколо стають гармонійними.</blockquote>"
             )
 
-        user_prompt = build_arcana_free_user_prompt(birth_date, base_arcana_name, soul_arcana_name)
         return await self._call_llm(ARCANA_FREE_SYSTEM_PROMPT, user_prompt, fallback)
 
-    # --- 4. Платний любовний сценарій ---
+    # --- 4. Любовний сценарій Арканів (Платний) ---
     async def generate_arcana_deep_love(
         self,
         birth_date: str,
         base_arcana_name: str,
         soul_arcana_name: str
     ) -> str:
+        user_prompt = build_arcana_deep_user_prompt(birth_date, base_arcana_name, soul_arcana_name)
+
         def fallback() -> str:
             return (
-                f"<b>Кого ти несвідомо притягуєш</b>\n"
-                f"Через взаємодію Арканів {base_arcana_name} та {soul_arcana_name} до тебе тягнуться емоційно "
-                f"закриті або втомлені від життя чоловіки. Вони бачать у тобі безпечну гавань, ресурс і здатність зрозуміти все без слів. "
-                f"Але проблема в тому, що вони приходять брати, а не віддавати взамін.\n\n"
-                f"<b>Чому повторюється той самий сценарій</b>\n"
-                f"Ти плутаєш спокій із нудьгою, а тривогу та гойдалки — зі справжньою пристрастю. "
-                f"Якщо чоловік доступний, надійний і не зникає, тобі здається, що 'немає іскри'. "
-                f"Але щойно він віддаляється — вмикається азарт довести свою важливість.\n\n"
-                f"<b>Який партнер тобі насправді потрібен</b>\n"
-                f"Тобі потрібна людина зі зрілим Імператорським або Магічним стрижнем: той, чиї слова не розходяться з діями. "
-                f"Чоловік, який не боїться говорити про почуття прямо і не змушує тебе гадати на кавовій гущі, "
-                f"хто ти для нього сьогодні."
+                f"✦ <b>1. Яких партнерів ти несвідомо притягуєш:</b>\n"
+                f"Твоя конфігурація ({base_arcana_name} + {soul_arcana_name}) часто приваблює яскравих, але емоційно нестабільних партнерів. "
+                f"Ти несвідомо бачиш у них потенціал, який хочеш розкрити, забуваючи про власні потреби.\n\n"
+                f"✦ <b>2. Повторювані сценарії та тригери:</b>\n"
+                f"Головний патерн — віддавати більше турботи й уваги, ніж отримувати натомість. "
+                f"Коли накопичується втома, виникає розчарування та відчуття самотності удвох.\n\n"
+                f"✦ <b>3. Як вийти з замкненого кола:</b>\n"
+                f"Перестань бути «рятівницею». Твій ідеальний баланс — партнер з розвиненою внутрішньою відповідальністю, який діє, а не обіцяє.\n\n"
+                f"<blockquote>Практична порада: на початку знайомства оцінюй вчинки людини за місяць, а не її слова за перший вечір.</blockquote>"
             )
 
-        user_prompt = build_arcana_deep_user_prompt(birth_date, base_arcana_name, soul_arcana_name)
         return await self._call_llm(ARCANA_DEEP_LOVE_PROMPT, user_prompt, fallback)
 
 

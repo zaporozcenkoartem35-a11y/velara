@@ -28,24 +28,49 @@ def get_interactive_card_grid(selected_indices: List[int]) -> InlineKeyboardMark
 
 def get_tarot_paywall_keyboard() -> InlineKeyboardMarkup:
     """
-    Акуратний пейвол без тиску.
+    Акуратний пейвол на Таро без тиску.
+    Ціни беруться строго з налаштувань.
     """
     keyboard = [
         [
             InlineKeyboardButton(
-                text=f"⭐ 1 розклад — {settings.TAROT_PRICE_1} Stars",
+                text=f"⭐ 1 розклад — {settings.tarot_price_1} Stars",
                 callback_data="buy_stars:tarot_1"
             )
         ],
         [
             InlineKeyboardButton(
-                text=f"⭐ 3 розклади — {settings.TAROT_PRICE_3} Stars (-15%)",
+                text=f"⭐ 3 розклади — {settings.tarot_price_3} Stars (-15%)",
                 callback_data="buy_stars:tarot_3"
             )
         ],
         [
             InlineKeyboardButton(
                 text="🎁 Отримати безкоштовно за подругу",
+                callback_data="btn_profile"
+            )
+        ],
+        [
+            InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_compat_paywall_keyboard() -> InlineKeyboardMarkup:
+    """
+    Пейвол для модуля сумісності після використання 1 безкоштовної спроби.
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=f"⭐ Перевірка сумісності — {settings.compat_price} Stars",
+                callback_data="buy_stars:compat_1"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎁 Запросити подругу (+1 перевірка)",
                 callback_data="btn_profile"
             )
         ],

@@ -13,12 +13,18 @@ class User:
     referrer_id: Optional[int]
     free_tarot_credits: int
     paid_tarot_credits: int
+    free_compat_credits: int
+    paid_compat_credits: int
     first_seen: str
     last_seen: str
 
     @property
     def total_tarot_credits(self) -> int:
-        return self.free_tarot_credits + self.paid_tarot_credits
+        return (self.free_tarot_credits or 0) + (self.paid_tarot_credits or 0)
+
+    @property
+    def total_compat_credits(self) -> int:
+        return (self.free_compat_credits or 0) + (self.paid_compat_credits or 0)
 
 
 @dataclass

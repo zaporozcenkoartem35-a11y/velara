@@ -1,10 +1,12 @@
 import re
+import logging
 from datetime import datetime
 from aiogram import Router, Bot, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest
 from database.repository import UserRepository
 from services.arcana_math import (
     calculate_base_arcana,
@@ -14,8 +16,10 @@ from services.arcana_math import (
 from services.llm import llm_service
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
+from keyboards.tarot_kb import get_compat_paywall_keyboard
 from config import settings
 
+logger = logging.getLogger("handlers.compatibility")
 router = Router(name="compatibility_router")
 
 
@@ -35,12 +39,10 @@ def parse_name_and_date(text: str, default_name: str = "Ти") -> tuple[str, str
         raise ValueError("Дата не знайдена у форматі ДД.ММ.РРРР")
 
     date_str = match.group(0)
-    # Перевірка валідності реальної дати
     parsed = datetime.strptime(date_str, "%d.%m.%Y")
     if not (1930 <= parsed.year <= 2024):
         raise ValueError("Рік має бути в межах 1930–2024")
 
-    # Ім'я — все, що було до або після дати
     name_candidate = clean.replace(date_str, "").strip(" ,-–")
     name = name_candidate if len(name_candidate) >= 2 else default_name
     return name[:30], date_str, parsed.day, parsed.month, parsed.year
@@ -51,10 +53,27 @@ async def start_compatibility(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     db_user = await UserRepository.get_user(user_id)
 
-    # Якщо дата вже збережена в базі
+    # 1. Перевірка балансу перевірок сумісності (1 безкоштовна на акаунт)
+    if not db_user or db_user.total_compat_credits <= 0:
+        await UserRepository.record_event(user_id, "paywall_compat_shown")
+        paywall_text = (
+            "✨ <b>Твою безкоштовну перевірку сумісності вже використано</b>\n\n"
+            "Щоб розрахувати нову пару та дізнатися лінію тяжіння за Арканами, обери зручний варіант:\n\n"
+            f"✦ <b>Підтримати Telegram Stars ({settings.compat_price} ⭐)</b> — миттєвий доступ\n"
+            "✦ <b>Запросити подругу</b> — отримай +1 перевірку безкоштовно"
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                text=paywall_text,
+                reply_markup=get_compat_paywall_keyboard(),
+                parse_mode="HTML"
+            )
+        await callback.answer()
+        return
+
+    # Якщо дата користувача вже збережена в базі
     if db_user and db_user.birth_date:
         saved_date = db_user.birth_date
-        u_name = callback.from_user.first_name or "Ти"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -80,7 +99,7 @@ async def start_compatibility(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    # Запитуємо дані користувача
+    # Запитуємо дату та ім'я користувача
     await state.set_state(CompatStates.waiting_user_data)
     prompt_text = (
         "✨ <b>Сумісність за Арканами долі</b>\n\n"
@@ -152,7 +171,7 @@ async def process_user_data(message: Message, state: FSMContext):
         await message.answer("Будь ласка, вкажи коректну дату у форматі ДД.ММ.РРРР (наприклад: <code>15.08.1998</code>).", parse_mode="HTML")
         return
 
-    # Зберігаємо дату користувача в БД, щоб наступного разу не питати
+    # Зберігаємо дату користувача в БД
     await UserRepository.update_birth_date(message.from_user.id, date_str)
 
     await state.update_data(
@@ -184,13 +203,16 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
 
     user_id = message.from_user.id
 
-    # Перевіряємо денний ліміт
-    allowed = await UserRepository.check_and_increment_compat_limit(user_id, settings.COMPATIBILITY_DAILY_LIMIT)
-    if not allowed:
+    # Перевірка наявності кредитів на сумісність
+    db_user = await UserRepository.get_user(user_id)
+    if not db_user or db_user.total_compat_credits <= 0:
+        await UserRepository.record_event(user_id, "paywall_compat_shown")
         await message.answer(
-            "✦ <b>Денний ліміт сумісності вичерпано (3/3)</b>\n\n"
-            "Щоб зберегти свіжість сприйняття, повертайся завтра або запроси подругу у розділі «👤 Профіль».",
-            reply_markup=get_main_menu_keyboard(),
+            "✨ <b>Твою безкоштовну перевірку сумісності вже використано</b>\n\n"
+            "Щоб отримати повний розрахунок, обери зручний варіант:\n\n"
+            f"✦ <b>Оплатити перевірку ({settings.compat_price} Stars)</b>\n"
+            "✦ <b>Запросити подругу (+1 перевірка безкоштовно)</b>",
+            reply_markup=get_compat_paywall_keyboard(),
             parse_mode="HTML"
         )
         await state.clear()
@@ -218,7 +240,7 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
         p_arcana = get_arcana_info(p_base_num)
         pair_arcana = get_arcana_info(pair_num)
 
-        # Виклик LLM
+        # Виклик LLM з обробкою таймаутів
         analysis = await llm_service.generate_compatibility(
             user_name=u_name,
             user_birth=u_date_str,
@@ -229,6 +251,8 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             pair_arcana_name=f"{pair_num}. {pair_arcana['name']}"
         )
 
+        # Списуємо 1 кредит сумісності ТІЛЬКИ після успішного розрахунку
+        await UserRepository.deduct_compat_credit(user_id)
         await UserRepository.record_event(user_id, "compat_completed", f"{u_base_num}+{p_base_num}={pair_num}")
 
         header = (
@@ -246,15 +270,27 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             ]
         )
 
-        await loading_msg.edit_text(
-            text=f"{header}{analysis}",
-            reply_markup=result_kb,
-            parse_mode="HTML"
-        )
+        full_response = f"{header}{analysis}"
+        try:
+            await loading_msg.edit_text(
+                text=full_response,
+                reply_markup=result_kb,
+                parse_mode="HTML"
+            )
+        except TelegramBadRequest as te:
+            logger.warning(f"TelegramBadRequest під час відправки HTML сумісності: {te}. Відправка простим текстом.")
+            plain_text = re.sub(r"<[^>]+>", "", full_response)
+            await loading_msg.edit_text(
+                text=plain_text,
+                reply_markup=result_kb,
+                parse_mode=None
+            )
+
         await state.clear()
     except Exception as e:
+        logger.error(f"Помилка аналізу сумісності: {e}", exc_info=True)
         await loading_msg.edit_text(
-            "<i>Вибач, сталася технічна помилка. Спробуй ще раз за хвилину.</i>",
+            "<i>Вибач, сталася технічна помилка. Твій баланс збережено. Спробуй ще раз за хвилину.</i>",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )

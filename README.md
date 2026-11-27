@@ -1,6 +1,6 @@
 # 🕯 Velara — Естетичний Telegram-бот Таро та психології стосунків
 
-Сучасний, повністю асинхронний продакшен-бот на **Python 3.11+**, **aiogram 3.x**, **aiosqlite** та **AsyncOpenAI** в ніші сучасного Таро, психології стосунків, сумісності та Арканів за датою народження.
+Сучасний, повністю асинхронний продакшен-бот на **Python 3.11+**, **aiogram 3.x**, **PostgreSQL** (`asyncpg`) / **SQLite** (`aiosqlite`) та **AsyncOpenAI** в ніші сучасного Таро, психології стосунків, сумісності та Арканів за датою народження.
 
 ---
 
@@ -13,22 +13,22 @@
 
 ## 🛠 Технічний стек:
 * **Фреймворк:** `aiogram 3.x` (FSM, Роутери, Middleware).
-* **База даних:** `SQLite` (`aiosqlite`), чистий шар репозиторіїв `UserRepository` (готовий до міграції на PostgreSQL).
-* **LLM клієнт:** `AsyncOpenAI` (підтримка OpenAI, OpenRouter, Google Gemini, Groq, Claude).
-* **Монетизація:** Нативна оплата `Telegram Stars` (`XTR`).
-* **Безпека:** In-memory Throttling lock від паралельних запитів до LLM.
+* **База даних:** Dual-engine адаптер з підтримкою **PostgreSQL** (хмарний продакшен Render/Supabase через `asyncpg`) та автоматичним fallback на **SQLite** (`aiosqlite`). Повна авто-міграція колонок та таблиць.
+* **LLM клієнт:** `AsyncOpenAI` (OpenAI, OpenRouter, Google Gemini, Groq, Claude) з обмеженням `max_tokens=650`, `timeout=30.0` та захистом від збоїв HTML-парсингу Telegram.
+* **Монетизація:** Нативна оплата `Telegram Stars` (`XTR`), динамічне налаштування цін з `.env`, команди `/paysupport` та `/refund`.
+* **Безпека:** In-memory Throttling lock від подвійних кліків і паралельних генерацій, валідація запитання (5–500 символів).
 
 ---
 
 ## 📂 Структура проєкту:
 ```
 gadalka_bot/
-├── main.py                     # Вхідна точка, aiohttp сервер + Telegram polling
-├── config.py                   # Pydantic Settings з валідацією
+├── main.py                     # Вхідна точка, aiohttp healthcheck сервер + Telegram polling
+├── config.py                   # Pydantic Settings з підтримкою PostgreSQL, динамічних цін та прапорців
 ├── database/
-│   ├── db.py                   # Ініціалізація SQLite (WAL-mode, foreign keys, індекси)
-│   ├── models.py               # Dataclass моделі User, Payment, Event
-│   └── repository.py           # Асинхронні операції з базою (юзери, баланси, ліміти, воронка)
+│   ├── db.py                   # Dual-Engine адаптер (PostgreSQL asyncpg / SQLite aiosqlite, авто-міграції)
+│   ├── models.py               # Dataclass моделі User (із балансом Таро та сумісності), Payment, Event
+│   └── repository.py           # Чистий шар репозиторію з уніфікованими SQL-запитами
 ├── middlewares/
 │   └── throttling.py           # Захист від подвійних кліків та блокування на час генерації LLM
 ├── services/
@@ -41,15 +41,15 @@ gadalka_bot/
 │   └── arcana_prompt.py        # Промпти для базового та глибокого любовного сценарію
 ├── keyboards/
 │   ├── menu.py                 # Головне меню, скасування, профіль
-│   ├── tarot_kb.py             # Інтерактивна сітка вибору 3 карт [ ✦ ], пейвол
-│   └── payment_kb.py           # Інвойси та кнопки Telegram Stars
+│   ├── tarot_kb.py             # Інтерактивна сітка вибору карт [ ✦ ], динамічні пейволи Таро та Сумісності
+│   └── payment_kb.py           # Інвойси та кнопки Telegram Stars (динамічні ціни)
 ├── handlers/
-│   ├── start.py                # /start, deep-link (utm/ref), +1 кредит за подругу
-│   ├── tarot.py                # FSM-сценарій розкладу, ритуал, списання кредитів
-│   ├── compatibility.py        # Сумісність, валідація ДД.ММ.РРРР, ліміт 3/день
-│   ├── arcana.py               # Мій Аркан, безкоштовний портрет + апсейл
-│   ├── payments.py             # Telegram Stars (pre_checkout, successful_payment)
-│   └── admin.py                # /admin (воронка по utm_source), /export
+│   ├── start.py                # /start, deep-link (utm/ref), +1 Таро та +1 Сумісність за подругу
+│   ├── tarot.py                # FSM Таро (5-500 символів), списання кредитів, HTML fallback
+│   ├── compatibility.py        # Сумісність (1 безкоштовна перевірка, далі Stars або рефералка)
+│   ├── arcana.py               # Мій Аркан, безкоштовний портрет + платний любовний сценарій
+│   ├── payments.py             # Telegram Stars, каталог товарів, обробка оплат, /paysupport
+│   └── admin.py                # /admin (воронка по utm_source), /export (CSV), /refund (повернення Stars)
 ├── assets/cards/               # Локальні зображення карт (опціонально)
 └── static/tarot.html           # Інтерактивний Telegram Mini App віджет
 ```
@@ -70,10 +70,14 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-Заповніть обов'язкові поля:
+Основні змінні:
 * `BOT_TOKEN` — токен від [@BotFather](https://t.me/BotFather).
-* `ADMIN_IDS` — ваш числовий Telegram ID (дізнатися у [@userinfobot](https://t.me/userinfobot)).
-* `LLM_API_KEY` — ключ API (OpenAI або OpenRouter). Якщо ключа немає — автоматично спрацює інтелектуальний евристичний фоллбек без падіння бота.
+* `ADMIN_IDS` — ваш числовий Telegram ID.
+* `DATABASE_URL` — (опціонально) рядок підключення до PostgreSQL (наприклад, на Render). Якщо порожній — використовується локальний SQLite.
+* `LLM_API_KEY` — ключ API (OpenAI або OpenRouter).
+* `PRICE_TAROT_1`, `PRICE_TAROT_3`, `PRICE_ARCANA_LOVE`, `PRICE_COMPAT` — гнучке налаштування цін у Stars.
+* `SUPPORT_USERNAME` — юзернейм підтримки для команди `/paysupport`.
+* `ENABLE_WEBAPP` — `false` (за замовчуванням: чисті inline-кнопки в чаті) або `true`.
 
 ### 3. Запуск бота:
 ```bash
@@ -82,12 +86,14 @@ python main.py
 
 ---
 
-## 📊 Маркетинг та аналітика:
+## 📊 Маркетинг та команди:
 
-### Deep-links:
-* Реклама в каналі: `https://t.me/Velara_bot?start=ukrogoroskop`
-* Рефералка: `https://t.me/Velara_bot?start=ref_1092164380`
+### Посилання та бонуси:
+* Реклама в каналах: `https://t.me/Velara_bot?start=ukrogoroskop`
+* Реферальна програма: `https://t.me/Velara_bot?start=ref_<user_id>` (дає запросившому **+1 розклад Таро** та **+1 перевірку сумісності**).
 
-### Команда `/admin`:
-Виводить повну зведену аналітику та **конверсійну воронку за кожним джерелом трафіку**:
-`Джерело ➔ Стартів ➔ Завершили 1-й розклад ➔ Клікнули оплату ➔ Оплатили Stars (Конверсія %)`.
+### Команди:
+* `/paysupport` — інформація про безпеку платежів у Telegram Stars, умови повернення та контакт підтримки.
+* `/admin` — зведена аналітика та воронка за UTM-джерелами трафіку.
+* `/export` — вивантаження бази лідів у CSV (сумісне з SQLite та PostgreSQL).
+* `/refund <user_id> <charge_id>` — повернення платежу Stars користувачеві безпосередньо через Telegram API.

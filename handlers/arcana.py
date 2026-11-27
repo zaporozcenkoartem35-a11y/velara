@@ -1,10 +1,12 @@
 import re
+import logging
 from datetime import datetime
 from aiogram import Router, Bot, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest
 from database.repository import UserRepository
 from services.arcana_math import (
     calculate_base_arcana,
@@ -15,8 +17,8 @@ from services.llm import llm_service
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.payment_kb import get_arcana_upsell_keyboard
-from config import settings
 
+logger = logging.getLogger("handlers.arcana")
 router = Router(name="arcana_router")
 
 
@@ -121,8 +123,15 @@ async def generate_and_show_arcana(message_obj: Message, user_id: int, birth_dat
         else:
             kb = get_arcana_upsell_keyboard()
 
-        await loading.edit_text(text=final_text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await loading.edit_text(text=final_text, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest as te:
+            logger.warning(f"TelegramBadRequest у показі Аркана: {te}. Відправка простим текстом.")
+            plain_text = re.sub(r"<[^>]+>", "", final_text)
+            await loading.edit_text(text=plain_text, reply_markup=kb, parse_mode=None)
+
     except Exception as e:
+        logger.error(f"Помилка генерації Аркана: {e}", exc_info=True)
         await loading.edit_text(
             "<i>Вибач, сталася технічна помилка. Спробуй ще раз за хвилину.</i>",
             reply_markup=get_main_menu_keyboard(),
@@ -161,5 +170,12 @@ async def show_unlocked_love_scenario(callback: CallbackQuery, bot: Bot):
         "━━━━━━━━━━━━━━━━━━━\n\n"
     )
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]])
-    await loading.edit_text(text=f"{header}{deep_text}\n\n━━━━━━━━━━━━━━━━━━━", reply_markup=back_kb, parse_mode="HTML")
+    full_text = f"{header}{deep_text}\n\n━━━━━━━━━━━━━━━━━━━"
+    try:
+        await loading.edit_text(text=full_text, reply_markup=back_kb, parse_mode="HTML")
+    except TelegramBadRequest as te:
+        logger.warning(f"TelegramBadRequest у любовному сценарії: {te}. Відправка простим текстом.")
+        plain_text = re.sub(r"<[^>]+>", "", full_text)
+        await loading.edit_text(text=plain_text, reply_markup=back_kb, parse_mode=None)
+
     await callback.answer()

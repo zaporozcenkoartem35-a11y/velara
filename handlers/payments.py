@@ -1,4 +1,4 @@
-from datetime import datetime
+import logging
 from aiogram import Router, Bot, F
 from aiogram.types import (
     CallbackQuery,
@@ -8,31 +8,73 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
+from aiogram.filters import Command
 from config import settings
 from database.repository import UserRepository
-from services.arcana_math import calculate_base_arcana, calculate_soul_arcana, get_arcana_info
-from services.llm import llm_service
-from keyboards.menu import get_main_menu_keyboard
 
+logger = logging.getLogger("handlers.payments")
 router = Router(name="payments_router")
 
-PRODUCTS_CATALOG = {
-    "tarot_1": {
-        "title": "1 розклад Таро",
-        "description": "Глибокий аналіз стосунків на 3 карти з психологічним розбором",
-        "stars": settings.TAROT_PRICE_1
-    },
-    "tarot_3": {
-        "title": "3 розклади Таро",
-        "description": "Пакет із 3 розкладів Таро зі знижкою 15%",
-        "stars": settings.TAROT_PRICE_3
-    },
-    "arcana_love": {
-        "title": "Любовний сценарій за Арканами",
-        "description": "Аналіз типажу партнерів, повторюваних тригерів та сумісності",
-        "stars": settings.ARCANA_LOVE_PRICE
+
+def get_products_catalog() -> dict:
+    """
+    Каталог товарів Telegram Stars з динамічними цінами строго з .env / settings.
+    """
+    return {
+        "tarot_1": {
+            "title": "1 розклад Таро",
+            "description": "Глибокий аналіз стосунків на 3 карти з психологічним розбором",
+            "stars": settings.tarot_price_1
+        },
+        "tarot_3": {
+            "title": "3 розклади Таро",
+            "description": "Пакет із 3 розкладів Таро зі знижкою 15%",
+            "stars": settings.tarot_price_3
+        },
+        "arcana_love": {
+            "title": "Любовний сценарій за Арканами",
+            "description": "Аналіз типажу партнерів, повторюваних тригерів та сумісності",
+            "stars": settings.arcana_love_price
+        },
+        "compat_1": {
+            "title": "1 перевірка сумісності",
+            "description": "Розрахунок перетину Арканів пари та лінії взаємного тяжіння",
+            "stars": settings.compat_price
+        }
     }
-}
+
+
+@router.message(Command("paysupport"))
+async def handle_paysupport(message: Message):
+    """
+    Офіційна інформація щодо підтримки та повернень у Telegram Stars.
+    """
+    support_user = settings.clean_support_username
+    text = (
+        "✦ <b>Підтримка платежів Velara (Telegram Stars)</b>\n\n"
+        "Усі транзакції в боті здійснюються офіційно через систему <b>Telegram Stars (XTR)</b> "
+        "з дотриманням правил безпеки та конфіденційності платформи Telegram.\n\n"
+        "<b>Важлива інформація:</b>\n"
+        "• <b>Активація послуг:</b> розклади Таро, перевірки сумісності та любовні сценарії активуються миттєво після успішної транзакції.\n"
+        "• <b>Збій або неотримання:</b> якщо через мережеву затримку баланс не оновився, надішли нам скріншот оплати з квитанцією Telegram.\n"
+        "• <b>Повернення (Refund):</b> за зверненням у підтримку ми можемо повернути зірки (Stars) на твій баланс Telegram у разі технічного збою.\n\n"
+        f"💬 <b>Служба підтримки:</b> @{support_user}"
+    )
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Написати в підтримку",
+                    url=f"https://t.me/{support_user}"
+                )
+            ],
+            [
+                InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")
+            ]
+        ]
+    )
+    await message.answer(text=text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("buy_stars:"))
@@ -40,7 +82,8 @@ async def handle_buy_stars(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
     product_type = callback.data.split(":", 1)[1]
 
-    product = PRODUCTS_CATALOG.get(product_type)
+    catalog = get_products_catalog()
+    product = catalog.get(product_type)
     if not product:
         await callback.answer("Товар не знайдено", show_alert=True)
         return
@@ -57,7 +100,7 @@ async def handle_buy_stars(callback: CallbackQuery, bot: Bot):
         payload=f"{product_type}:{user_id}",
         currency="XTR",  # Telegram Stars
         prices=prices,
-        provider_token=""  # Для Telegram Stars provider_token завжди порожній рядок!
+        provider_token=""  # Для Telegram Stars provider_token завжди порожній рядок
     )
     await callback.answer()
 
@@ -86,7 +129,7 @@ async def process_successful_payment(message: Message, bot: Bot):
         charge_id=charge_id
     )
 
-    # Видаємо придбану послугу
+    # Видаємо придбану послугу відповідно до типу
     if product_type == "tarot_1":
         await UserRepository.add_tarot_credits(user_id, 1, is_paid=True)
         kb = InlineKeyboardMarkup(
@@ -101,7 +144,6 @@ async def process_successful_payment(message: Message, bot: Bot):
             reply_markup=kb,
             parse_mode="HTML"
         )
-
     elif product_type == "tarot_3":
         await UserRepository.add_tarot_credits(user_id, 3, is_paid=True)
         kb = InlineKeyboardMarkup(
@@ -112,40 +154,46 @@ async def process_successful_payment(message: Message, bot: Bot):
         )
         await message.answer(
             "✨ <b>Дякую за підтримку Velara!</b>\n\n"
-            "Тобі нараховано <b>+3 повних розклади Таро</b> 🌙. Вони збережуться за тобою назавжди.",
+            "Тобі нараховано <b>+3 розклади Таро</b> 🌙. Вони збережені у твоєму профілі.",
             reply_markup=kb,
             parse_mode="HTML"
         )
-
+    elif product_type == "compat_1":
+        await UserRepository.add_compat_credits(user_id, 1, is_paid=True)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✨ Перевірити сумісність", callback_data="btn_compatibility")],
+                [InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]
+            ]
+        )
+        await message.answer(
+            "✨ <b>Дякую за підтримку Velara!</b>\n\n"
+            "Тобі нараховано <b>+1 перевірку сумісності</b> ✨. Можеш скористатися нею просто зараз.",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
     elif product_type == "arcana_love":
         await UserRepository.unlock_arcana(user_id)
-        db_user = await UserRepository.get_user(user_id)
-
-        if db_user and db_user.birth_date:
-            parsed = datetime.strptime(db_user.birth_date, "%d.%m.%Y")
-            base_num = calculate_base_arcana(parsed.day)
-            soul_num = calculate_soul_arcana(parsed.day, parsed.month, parsed.year)
-            base_info = get_arcana_info(base_num)
-            soul_info = get_arcana_info(soul_num)
-
-            loading = await message.answer("<i>Платіж підтверджено! Формую твій індивідуальний любовний сценарій...</i>", parse_mode="HTML")
-
-            deep_text = await llm_service.generate_arcana_deep_love(
-                birth_date=db_user.birth_date,
-                base_arcana_name=f"{base_num}. {base_info['name']}",
-                soul_arcana_name=f"{soul_num}. {soul_info['name']}"
-            )
-
-            header = (
-                "🔒 <b>Твій ексклюзивний любовний сценарій</b>\n"
-                f"<i>Аркани: {base_info['name']} & {soul_info['name']}</i>\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n\n"
-            )
-            back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]])
-            await loading.edit_text(text=f"{header}{deep_text}\n\n━━━━━━━━━━━━━━━━━━━", reply_markup=back_kb, parse_mode="HTML")
-        else:
-            await message.answer(
-                "✨ <b>Доступ відкрито!</b>\n\nТепер перейди в розділ «✦ Мій Аркан» та вкажи свою дату народження.",
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode="HTML"
-            )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📖 Читати мій любовний сценарій",
+                        callback_data="show_unlocked_love_scenario"
+                    )
+                ],
+                [InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]
+            ]
+        )
+        await message.answer(
+            "✨ <b>Твій любовний сценарій розблоковано!</b>\n\n"
+            "Глибокий аналіз типажу партнерів, повторюваних тригерів та родових патернів тепер доступний.",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    else:
+        logger.warning(f"Невідомий product_type після оплати: {product_type}")
+        await message.answer(
+            "✨ <b>Оплату отримано!</b> Дякуємо за підтримку. Твій доступ активовано.",
+            parse_mode="HTML"
+        )

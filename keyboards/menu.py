@@ -1,10 +1,10 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import settings
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """
-    Чисте, мінімалістичне головне меню Velara.
+    Чисте головне меню Velara.
     """
     keyboard = [
         [
@@ -34,7 +34,7 @@ def get_profile_keyboard(referral_link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="💌 Поділитися з подругою (+1 розклад)", url=share_url)
+                InlineKeyboardButton(text="💌 Поділитися з подругою (+1 бонус)", url=share_url)
             ],
             [
                 InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")
