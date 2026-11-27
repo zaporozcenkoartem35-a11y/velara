@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Алтар Таро Велари</title>
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Montserrat:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-start: #0a0513;
+      --bg-end: #170d2b;
+      --gold: #f4d06f;
+      --gold-dark: #b8860b;
+      --card-bg: #120a22;
+      --text: #f0e6f6;
+      --text-muted: #bda7cc;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 20%, #251242 0%, var(--bg-start) 60%, var(--bg-end) 100%);
+      color: var(--text);
+      font-family: 'Montserrat', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 16px 28px;
+      overflow-x: hidden;
+    }
+
+    /* Звёздный фон */
+    .stars {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      background-image: 
+        radial-gradient(1px 1px at 25px 35px, #fff, rgba(0,0,0,0)),
+        radial-gradient(1.5px 1.5px at 150px 80px, #ffd700, rgba(0,0,0,0)),
+        radial-gradient(1px 1px at 280px 190px, #fff, rgba(0,0,0,0)),
+        radial-gradient(2px 2px at 70px 240px, #e6c875, rgba(0,0,0,0)),
+        radial-gradient(1px 1px at 220px 320px, #fff, rgba(0,0,0,0));
+      background-size: 300px 350px;
+      opacity: 0.5;
+      z-index: 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .subtitle-badge {
+      display: inline-block;
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--gold);
+      background: rgba(244, 208, 111, 0.1);
+      border: 1px solid rgba(244, 208, 111, 0.25);
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      font-family: 'Cinzel', serif;
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 0 15px rgba(244, 208, 111, 0.4);
+      margin-bottom: 6px;
+      letter-spacing: 1px;
+    }
+
+    .instructions {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      font-weight: 400;
+      max-width: 290px;
+      margin: 0 auto;
+    }
+
+    /* Карты */
+    .cards-row {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      perspective: 1000px;
+      margin: 10px 0 20px;
+    }
+
+    .card-wrap {
+      width: 30%;
+      max-width: 110px;
+      aspect-ratio: 2 / 3.4;
+      cursor: pointer;
+    }
+
+    .card-inner {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      transform-style: preserve-3d;
+      transition: transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      border-radius: 12px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6);
+    }
+
+    .card-wrap.flipped .card-inner {
+      transform: rotateY(180deg);
+    }
+
+    .card-face {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      backface-visibility: hidden;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 6px;
+      border: 1px solid rgba(244, 208, 111, 0.3);
+    }
+
+    /* Рубашка карты */
+    .card-back {
+      background: linear-gradient(145deg, #180d2d, #0d061a);
+      border: 1.5px solid var(--gold);
+      box-shadow: inset 0 0 12px rgba(244, 208, 111, 0.2);
+    }
+
+    .card-back::before {
+      content: '';
+      position: absolute;
+      inset: 4px;
+      border: 1px dashed rgba(244, 208, 111, 0.35);
+      border-radius: 8px;
+    }
+
+    .back-emblem {
+      width: 44px;
+      height: 44px;
+      margin: auto;
+      border-radius: 50%;
+      border: 1px solid var(--gold);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: var(--gold);
+      box-shadow: 0 0 10px rgba(244, 208, 111, 0.3);
+      animation: pulse 3s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.08); opacity: 1; }
+    }
+
+    /* Лицевая сторона карты */
+    .card-front {
+      background: linear-gradient(145deg, #24133f, #140924);
+      transform: rotateY(180deg);
+      border: 1.5px solid var(--gold);
+      text-align: center;
+    }
+
+    .card-front-icon {
+      font-size: 34px;
+      margin-top: 6px;
+      filter: drop-shadow(0 0 8px rgba(244, 208, 111, 0.5));
+    }
+
+    .card-front-title {
+      font-family: 'Cinzel', serif;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .card-front-tag {
+      font-size: 9px;
+      color: #dfceee;
+      opacity: 0.8;
+    }
+
+    /* Результат предсказания */
+    .result-box {
+      width: 100%;
+      background: rgba(26, 14, 46, 0.7);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(244, 208, 111, 0.3);
+      border-radius: 16px;
+      padding: 18px 16px;
+      margin-top: 8px;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      animation: fadeIn 0.6s ease;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-title {
+      font-family: 'Cinzel', serif;
+      font-size: 16px;
+      color: var(--gold);
+      margin-bottom: 8px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .result-text {
+      font-size: 13.5px;
+      color: #ede3f5;
+      line-height: 1.5;
+      margin-bottom: 14px;
+      font-weight: 400;
+    }
+
+    .btn-action {
+      background: linear-gradient(135deg, #f4d06f, #b8860b);
+      color: #120624;
+      font-family: 'Montserrat', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
+      border-radius: 25px;
+      padding: 10px 22px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(244, 208, 111, 0.4);
+      transition: all 0.2s;
+    }
+
+    .btn-action:active {
+      transform: scale(0.96);
+    }
+
+    footer {
+      font-size: 11px;
+      color: rgba(240, 230, 246, 0.4);
+      margin-top: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="stars"></div>
+
+  <div class="container">
+    <header>
+      <div class="subtitle-badge">🔮 Ексклюзивний віджет</div>
+      <h1>Алтар Велари</h1>
+      <p class="instructions" id="hint">Заплющ очі, відчуй своє запитання та вибери одну з трьох карт долі 👇</p>
+    </header>
+
+    <div class="cards-row" id="cardsRow">
+      <!-- Карта 1 -->
+      <div class="card-wrap" data-card="0" onclick="chooseCard(0)">
+        <div class="card-inner">
+          <div class="card-face card-back">
+            <div class="back-emblem">✨</div>
+          </div>
+          <div class="card-face card-front">
+            <div class="card-front-icon">❤️</div>
+            <div>
+              <div class="card-front-title">Закохані</div>
+              <div class="card-front-tag">The Lovers</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Карта 2 -->
+      <div class="card-wrap" data-card="1" onclick="chooseCard(1)">
+        <div class="card-inner">
+          <div class="card-face card-back">
+            <div class="back-emblem">👁</div>
+          </div>
+          <div class="card-face card-front">
+            <div class="card-front-icon">⭐</div>
+            <div>
+              <div class="card-front-title">Зірка</div>
+              <div class="card-front-tag">The Star</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Карта 3 -->
+      <div class="card-wrap" data-card="2" onclick="chooseCard(2)">
+        <div class="card-inner">
+          <div class="card-face card-back">
+            <div class="back-emblem">🌙</div>
+          </div>
+          <div class="card-face card-front">
+            <div class="card-front-icon">🎡</div>
+            <div>
+              <div class="card-front-title">Колесо Долі</div>
+              <div class="card-front-tag">Fortune</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Блок предсказания -->
+    <div class="result-box" id="resultBox">
+      <div class="result-title" id="resultTitle"></div>
+      <p class="result-text" id="resultText"></p>
+      <button class="btn-action" onclick="resetSpread()">Спробувати ще раз</button>
+    </div>
+  </div>
+
+  <footer>
+    Тайний простір Велари • Telegram Mini App
+  </footer>
+
+  <script>
+    // Инициализация Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      // Настройка темы
+      tg.setHeaderColor('#0a0513');
+      tg.setBackgroundColor('#0a0513');
+    }
+
+    const cardsData = [
+      {
+        title: "Аркан VI — Закохані (The Lovers)",
+        text: "Він постійно думає про тебе, навіть коли мовчить. Між вами існує сильний кармічний магнетизм. Карти вказують на важливу розмову або перший крок з його боку протягом найближчих днів!"
+      },
+      {
+        title: "Аркан XVII — Зірка (The Star)",
+        text: "Твоє серце не помиляється. Настає період зцілення та взаємності. Все, що тривожило тебе в стосунках, невдовзі стане кришталево зрозумілим. На тебе чекає несподіваний теплий знак від Всесвіту."
+      },
+      {
+        title: "Аркан X — Колесо Долі (Wheel of Fortune)",
+        text: "Готуйся: ситуація розгорнеться на 180 градусів на твою користь! Людина, яка тримала дистанцію, несподівано проявить ініціативу. Доля бере ваші стосунки у свої руки."
+      }
+    ];
+
+    let hasChosen = false;
+
+    function chooseCard(index) {
+      if (hasChosen) return;
+      hasChosen = true;
+
+      // Виброотклик Telegram (Haptic Feedback)
+      if (tg?.HapticFeedback) {
+        tg.HapticFeedback.impactOccurred('heavy');
+      }
+
+      // Переворачиваем карту
+      const cardWrap = document.querySelector(`.card-wrap[data-card="${index}"]`);
+      cardWrap.classList.add('flipped');
+
+      // Затемняем остальные
+      document.querySelectorAll('.card-wrap').forEach((card, i) => {
+        if (i !== index) {
+          card.style.opacity = '0.35';
+          card.style.transform = 'scale(0.92)';
+          card.style.transition = 'all 0.5s';
+        }
+      });
+
+      // Показываем результат
+      setTimeout(() => {
+        if (tg?.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('success');
+        }
+
+        const data = cardsData[index];
+        document.getElementById('resultTitle').textContent = data.title;
+        document.getElementById('resultText').textContent = data.text;
+        document.getElementById('hint').textContent = "Твоє таємне послання від карт Таро відкрито ✨";
+        document.getElementById('resultBox').style.display = 'flex';
+      }, 700);
+    }
+
+    function resetSpread() {
+      if (tg?.HapticFeedback) {
+        tg.HapticFeedback.impactOccurred('medium');
+      }
+
+      hasChosen = false;
+      document.querySelectorAll('.card-wrap').forEach(card => {
+        card.classList.remove('flipped');
+        card.style.opacity = '1';
+        card.style.transform = 'scale(1)';
+      });
+
+      document.getElementById('resultBox').style.display = 'none';
+      document.getElementById('hint').textContent = "Заплющ очі, відчуй своє запитання та вибери одну з трьох карт долі 👇";
+    }
+  </script>
+</body>
+</html>

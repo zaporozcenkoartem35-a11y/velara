@@ -27,16 +27,22 @@ async def healthcheck(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "bot": "velara_bot"})
 
 
+async def tarot_page(request: web.Request) -> web.Response:
+    """Отдаёт интерактивный Telegram WebApp виджет Таро."""
+    return web.FileResponse("static/tarot.html")
+
+
 async def start_web_server(port: int) -> None:
-    """Запуск фонового легковесного HTTP-сервера для healthcheck."""
+    """Запуск фонового легковесного HTTP-сервера для healthcheck и WebApp виджета."""
     app = web.Application()
     app.router.add_get("/", healthcheck)
     app.router.add_get("/health", healthcheck)
+    app.router.add_get("/tarot", tarot_page)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Healthcheck веб-сервер запущен на порту {port}")
+    logger.info(f"Healthcheck и WebApp веб-сервер запущен на порту {port}")
 
 
 async def main() -> None:

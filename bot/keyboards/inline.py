@@ -1,26 +1,30 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """
-    Клавиатура гадалки Велары.
-    Сформулирована под самые горячие боли аудитории из TikTok:
-    отношения, мысли партнёра, будущее, финансы.
+    Клавіатура ворожки Велари з інтерактивним віджетом та кнопками під болі аудиторії.
     """
     keyboard = [
         [
-            InlineKeyboardButton(text="🔮 Что он думает обо мне?", callback_data="feature:thoughts"),
-            InlineKeyboardButton(text="💔 Будем ли мы вместе?", callback_data="feature:together")
+            InlineKeyboardButton(
+                text="🔮 ВІДКРИТИ ІНТЕРАКТИВНИЙ АЛТАР ТАРО ✨",
+                web_app=WebAppInfo(url="https://velara-85ws.onrender.com/tarot")
+            )
         ],
         [
-            InlineKeyboardButton(text="🕯 Расклад на будущее и судьбу", callback_data="feature:future"),
-            InlineKeyboardButton(text="❤️ Совместимость по датам", callback_data="feature:compatibility")
+            InlineKeyboardButton(text="🔮 Що він думає про мене?", callback_data="feature:thoughts"),
+            InlineKeyboardButton(text="💔 Чи будемо ми разом?", callback_data="feature:together")
         ],
         [
-            InlineKeyboardButton(text="💰 Денежный канал и карьера", callback_data="feature:finance")
+            InlineKeyboardButton(text="🕯 Розклад на майбутнє та долю", callback_data="feature:future"),
+            InlineKeyboardButton(text="❤️ Сумісність за датами", callback_data="feature:compatibility")
         ],
         [
-            InlineKeyboardButton(text="🧿 Получить личный расклад в подарок", callback_data="feature:gift_spread")
+            InlineKeyboardButton(text="💰 Грошовий канал та кар'єра", callback_data="feature:finance")
+        ],
+        [
+            InlineKeyboardButton(text="🧿 Отримати особистий розклад у подарунок", callback_data="feature:gift_spread")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

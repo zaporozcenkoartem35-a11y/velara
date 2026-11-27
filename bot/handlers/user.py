@@ -8,14 +8,14 @@ from bot.services.notifier import notify_admins
 
 router = Router(name="user_router")
 
-# Словарь тем гадания для детальной статистики
+# Словник тем ворожіння для детальної статистики
 FEATURE_NAMES = {
-    "thoughts": "🔮 Что он думает обо мне?",
-    "together": "💔 Будем ли мы вместе?",
-    "future": "🕯 Расклад на будущее и судьбу",
-    "compatibility": "❤️ Совместимость по датам",
-    "finance": "💰 Денежный канал и карьера",
-    "gift_spread": "🧿 Личный расклад в подарок"
+    "thoughts": "🔮 Що він думає про мене?",
+    "together": "💔 Чи будемо ми разом?",
+    "future": "🕯 Розклад на майбутнє та долю",
+    "compatibility": "❤️ Сумісність за датами",
+    "finance": "💰 Грошовий канал та кар'єра",
+    "gift_spread": "🧿 Особистий розклад у подарунок"
 }
 
 
@@ -24,7 +24,7 @@ async def handle_start(message: Message, command: CommandObject, bot: Bot):
     user = message.from_user
     source = command.args or "direct"
 
-    # Регистрируем в БД
+    # Реєструємо в БД
     is_new = await register_user_start(
         user_id=user.id,
         username=user.username,
@@ -33,34 +33,34 @@ async def handle_start(message: Message, command: CommandObject, bot: Bot):
         source=source
     )
 
-    safe_name = html.escape(user.full_name or "Без имени")
-    user_tag = f"@{user.username}" if user.username else "<i>(нет юзернейма)</i>"
+    safe_name = html.escape(user.full_name or "Без імені")
+    user_tag = f"@{user.username}" if user.username else "<i>(немає юзернейма)</i>"
 
-    # Оповещаем администратора
+    # Сповіщаємо адміністратора
     if is_new:
         admin_text = (
-            f"🔮 <b>Новый человек пришёл к Веларе!</b>\n\n"
-            f"👤 <b>Пользователь:</b> {safe_name} ({user_tag})\n"
+            f"🔮 <b>Нова людина прийшла до Велари!</b>\n\n"
+            f"👤 <b>Користувач:</b> {safe_name} ({user_tag})\n"
             f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
-            f"🏷 <b>Источник (TikTok/креатив):</b> <code>{html.escape(source)}</code>"
+            f"🏷 <b>Джерело (TikTok/креатив):</b> <code>{html.escape(source)}</code>"
         )
     else:
         admin_text = (
-            f"🔄 <b>Повторный визит к Веларе:</b> {safe_name} ({user_tag})\n"
+            f"🔄 <b>Повторний візит до Велари:</b> {safe_name} ({user_tag})\n"
             f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
-            f"🏷 <b>Источник:</b> <code>{html.escape(source)}</code>"
+            f"🏷 <b>Джерело:</b> <code>{html.escape(source)}</code>"
         )
 
     await notify_admins(bot, admin_text)
 
-    # Атмосферный текст гадалки Велары
+    # Атмосферний текст ворожки Велари українською мовою
     welcome_text = (
-        f"🕯 <b>Приветствую тебя, душа моя.</b>\n\n"
-        f"Я — <b>Велара</b>, потомственная гадалка и таролог. "
-        f"Карты и звёзды не случайно привели тебя ко мне именно сегодня.\n\n"
-        f"Если ты здесь — значит, твоё сердце ищет ответы на сокровенные вопросы. "
-        f"Я помогу тебе увидеть правду: о мыслях любимого человека, судьбе отношений и твоём будущем.\n\n"
-        f"🔮 <b>Выбери, что волнует тебя больше всего прямо сейчас:</b>"
+        f"🕯 <b>Вітаю тебе, душе моя.</b>\n\n"
+        f"Я — <b>Велара</b>, спадкова ворожка та тарологиня. "
+        f"Карти та зорі не випадково привели тебе до мене саме сьогодні.\n\n"
+        f"Якщо ти тут — отже, твоє серце шукає відповіді на найпотаємніші запитання. "
+        f"Я допоможу тобі побачити правду: про думки коханої людини, майбутнє стосунків та твою долю.\n\n"
+        f"✨ <i>Спробуй наш інтерактивний віджет Таро вище або обери тему нижче:</i>"
     )
 
     await message.answer(
@@ -76,25 +76,25 @@ async def handle_feature_click(callback: CallbackQuery, bot: Bot):
     feature_key = callback.data.split(":", 1)[1]
     feature_title = FEATURE_NAMES.get(feature_key, feature_key)
 
-    # Логируем действие в БД
+    # Логуємо дію в БД
     await log_event(user.id, "button_click", feature_title)
 
-    # Оповещаем администратора
-    safe_name = html.escape(user.full_name or "Без имени")
-    user_tag = f"@{user.username}" if user.username else "<i>(нет юзернейма)</i>"
+    # Сповіщаємо адміністратора
+    safe_name = html.escape(user.full_name or "Без імені")
+    user_tag = f"@{user.username}" if user.username else "<i>(немає юзернейма)</i>"
     admin_text = (
-        f"🎯 <b>Запрос на расклад!</b>\n\n"
-        f"👤 <b>Пользователь:</b> {safe_name} ({user_tag})\n"
+        f"🎯 <b>Запит на розклад!</b>\n\n"
+        f"👤 <b>Користувач:</b> {safe_name} ({user_tag})\n"
         f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
-        f"🕯 <b>Выбранная тема:</b> <b>{feature_title}</b>"
+        f"🕯 <b>Обрана тема:</b> <b>{feature_title}</b>"
     )
     await notify_admins(bot, admin_text)
 
-    # Всплывающее окно в образе гадалки (не сухое "технические работы", а мистическая калибровка)
+    # Спливаюче вікно в образі ворожки
     alert_text = (
-        "🕯 Карты уже на алтаре, душа моя...\n\n"
-        "Прямо сейчас я провожу обряд очищения колоды перед открытием приёма. "
-        "Твоя энергия услышана — я внесла тебя в свой личный круг!\n\n"
-        "Как только алтарь будет открыт, я первой пришлю тебе подробный расклад в подарок! 🎁"
+        "🕯 Карти вже на вівтарі, душе моя...\n\n"
+        "Зараз я проводжу обряд очищення колоди перед відкриттям прийому. "
+        "Твою енергію почуто — я внесла тебе до свого закритого кола!\n\n"
+        "Спробуй поки що відкрити наш інтерактивний віджет вище — карти вже готові дати першу підказку! 🎁"
     )
     await callback.answer(text=alert_text, show_alert=True)
