@@ -1,0 +1,165 @@
+import re
+from datetime import datetime
+from aiogram import Router, Bot, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.enums import ChatAction
+from database.repository import UserRepository
+from services.arcana_math import (
+    calculate_base_arcana,
+    calculate_soul_arcana,
+    get_arcana_info
+)
+from services.llm import llm_service
+from middlewares.throttling import UserLockManager
+from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
+from keyboards.payment_kb import get_arcana_upsell_keyboard
+from config import settings
+
+router = Router(name="arcana_router")
+
+
+class ArcanaStates(StatesGroup):
+    waiting_birth_date = State()
+
+
+@router.callback_query(F.data == "btn_my_arcana")
+async def start_my_arcana(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    user_id = callback.from_user.id
+    db_user = await UserRepository.get_user(user_id)
+
+    # Якщо дата вже є в базі — одразу розраховуємо
+    if db_user and db_user.birth_date:
+        await generate_and_show_arcana(callback.message, user_id, db_user.birth_date, bot)
+        await callback.answer()
+        return
+
+    # Якщо дати немає — просимо ввести
+    await state.set_state(ArcanaStates.waiting_birth_date)
+    text = (
+        "✦ <b>Розрахунок твого Аркана долі</b>\n\n"
+        "Введи свою дату народження у форматі ДД.ММ.РРРР (наприклад: <code>14.08.1998</code>):"
+    )
+    if callback.message:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@router.message(ArcanaStates.waiting_birth_date)
+async def process_birth_date(message: Message, state: FSMContext, bot: Bot):
+    text = (message.text or "").strip()
+    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", text)
+    if not match:
+        await message.answer("Будь ласка, введи дату у форматі ДД.ММ.РРРР (наприклад: <code>14.08.1998</code>).", parse_mode="HTML")
+        return
+
+    date_str = match.group(0)
+    try:
+        parsed = datetime.strptime(date_str, "%d.%m.%Y")
+        if not (1930 <= parsed.year <= 2024):
+            raise ValueError()
+    except Exception:
+        await message.answer("Вкажи реальну дату народження (наприклад: <code>14.08.1998</code>).", parse_mode="HTML")
+        return
+
+    user_id = message.from_user.id
+    await UserRepository.update_birth_date(user_id, date_str)
+    await state.clear()
+
+    await generate_and_show_arcana(message, user_id, date_str, bot)
+
+
+async def generate_and_show_arcana(message_obj: Message, user_id: int, birth_date: str, bot: Bot):
+    parsed = datetime.strptime(birth_date, "%d.%m.%Y")
+    day, month, year = parsed.day, parsed.month, parsed.year
+
+    base_num = calculate_base_arcana(day)
+    soul_num = calculate_soul_arcana(day, month, year)
+
+    base_info = get_arcana_info(base_num)
+    soul_info = get_arcana_info(soul_num)
+
+    if not UserLockManager.acquire(user_id):
+        await message_obj.answer("Зачекай секунду, розрахунок уже триває...")
+        return
+
+    loading = await message_obj.answer("<i>Зчитую коди твого народження...</i>", parse_mode="HTML")
+    await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+
+    try:
+        portrait = await llm_service.generate_arcana_portrait(
+            birth_date=birth_date,
+            base_arcana_name=f"{base_num}. {base_info['name']}",
+            soul_arcana_name=f"{soul_num}. {soul_info['name']}"
+        )
+
+        await UserRepository.record_event(user_id, "arcana_completed", f"{base_num}:{soul_num}")
+
+        is_unlocked = await UserRepository.is_arcana_unlocked(user_id)
+
+        header = (
+            "✦ <b>Твій психологічний портрет за Арканами</b>\n\n"
+            f"📅 Дата: <b>{birth_date}</b>\n"
+            f"✦ Базовий Аркан (Особистість): <b>{base_num}. {base_info['name']}</b>\n"
+            f"✦ Аркан душі (Почуття): <b>{soul_num}. {soul_info['name']}</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        final_text = f"{header}{portrait}\n\n━━━━━━━━━━━━━━━━━━━"
+
+        if is_unlocked:
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="📖 Читати мій любовний сценарій", callback_data="show_unlocked_love_scenario")],
+                    [InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]
+                ]
+            )
+        else:
+            kb = get_arcana_upsell_keyboard()
+
+        await loading.edit_text(text=final_text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        await loading.edit_text(
+            "<i>Вибач, сталася технічна помилка. Спробуй ще раз за хвилину.</i>",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+    finally:
+        UserLockManager.release(user_id)
+
+
+@router.callback_query(F.data == "show_unlocked_love_scenario")
+async def show_unlocked_love_scenario(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    db_user = await UserRepository.get_user(user_id)
+    if not db_user or not db_user.birth_date:
+        await callback.answer("Спочатку вкажи дату народження у розділі «✦ Мій Аркан».", show_alert=True)
+        return
+
+    parsed = datetime.strptime(db_user.birth_date, "%d.%m.%Y")
+    base_num = calculate_base_arcana(parsed.day)
+    soul_num = calculate_soul_arcana(parsed.day, parsed.month, parsed.year)
+    base_info = get_arcana_info(base_num)
+    soul_info = get_arcana_info(soul_num)
+
+    loading = await callback.message.answer("<i>Відкриваю твій розбір любовного сценарію...</i>", parse_mode="HTML")
+    await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+
+    deep_text = await llm_service.generate_arcana_deep_love(
+        birth_date=db_user.birth_date,
+        base_arcana_name=f"{base_num}. {base_info['name']}",
+        soul_arcana_name=f"{soul_num}. {soul_info['name']}"
+    )
+
+    header = (
+        "🔒 <b>Твій ексклюзивний любовний сценарій</b>\n"
+        f"<i>Аркани: {base_info['name']} & {soul_info['name']}</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]])
+    await loading.edit_text(text=f"{header}{deep_text}\n\n━━━━━━━━━━━━━━━━━━━", reply_markup=back_kb, parse_mode="HTML")
+    await callback.answer()
