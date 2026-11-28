@@ -15,6 +15,8 @@ class User:
     paid_tarot_credits: int
     free_compat_credits: int
     paid_compat_credits: int
+    nudge_sent: int
+    is_blocked: int
     first_seen: str
     last_seen: str
 
@@ -43,4 +45,25 @@ class Event:
     user_id: int
     event_name: str
     payload: Optional[str]
+    created_at: str
+
+
+@dataclass
+class ReadingHistory:
+    id: int
+    user_id: int
+    reading_type: str
+    title: str
+    content: str
+    created_at: str
+
+
+@dataclass
+class LLMUsage:
+    id: int
+    user_id: int
+    feature: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
     created_at: str

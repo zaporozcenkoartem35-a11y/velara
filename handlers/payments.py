@@ -1,3 +1,4 @@
+import html
 import logging
 from aiogram import Router, Bot, F
 from aiogram.types import (
@@ -128,6 +129,26 @@ async def process_successful_payment(message: Message, bot: Bot):
         stars_amount=stars_amount,
         charge_id=charge_id
     )
+
+    catalog = get_products_catalog()
+    product_title = catalog[product_type]["title"] if product_type in catalog else product_type
+
+    # Миттєвий алерт адміну про оплату
+    db_user = await UserRepository.get_user(user_id)
+    utm_source = db_user.utm_source if db_user else "unknown"
+    admin_list = settings.ADMIN_IDS if isinstance(settings.ADMIN_IDS, list) else [settings.ADMIN_IDS]
+    admin_alert = (
+        f"💰 <b>Нова оплата Stars!</b>\n\n"
+        f"• Послуга: <b>{product_title}</b>\n"
+        f"• Сума: <b>{stars_amount} ⭐</b>\n"
+        f"• Юзер: <code>{user_id}</code> (@{message.from_user.username or 'немає'})\n"
+        f"• Джерело: <code>{html.escape(utm_source)}</code>"
+    )
+    for admin_id in admin_list:
+        try:
+            await bot.send_message(chat_id=admin_id, text=admin_alert, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Не вдалося надіслати алерт про оплату адміну {admin_id}: {e}")
 
     # Видаємо придбану послугу відповідно до типу
     if product_type == "tarot_1":

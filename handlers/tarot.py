@@ -9,7 +9,7 @@ from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest
 from database.repository import UserRepository
 from services.tarot_deck import deck
-from services.llm import llm_service
+from services.llm import llm_service, LLMServiceError
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.tarot_kb import (
@@ -29,6 +29,7 @@ class TarotStates(StatesGroup):
 
 @router.callback_query(F.data == "btn_tarot")
 async def start_tarot_flow(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     user_id = callback.from_user.id
     db_user = await UserRepository.get_user(user_id)
 
@@ -67,7 +68,13 @@ async def start_tarot_flow(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(TarotStates.waiting_situation)
+@router.message(TarotStates.waiting_situation, ~F.text)
+async def process_situation_non_text(message: Message):
+    """Обробка нетекстового вводу (фото, стікери, голосові)."""
+    await message.answer("Напиши, будь ласка, текстом — так я зможу точно розібрати твій запит 🌙")
+
+
+@router.message(TarotStates.waiting_situation, F.text)
 async def process_situation(message: Message, state: FSMContext):
     text = (message.text or "").strip()
 
@@ -149,8 +156,8 @@ async def process_card_pick(callback: CallbackQuery, state: FSMContext, bot: Bot
         drawn_cards = deck.draw_spread(count=3, allow_reversed=True)
         c1, c2, c3 = drawn_cards[0], drawn_cards[1], drawn_cards[2]
 
-        # Викликаємо LLM
-        reading = await llm_service.generate_tarot_reading(situation, drawn_cards)
+        # Викликаємо LLM без жодних шаблонних фейкових відповідей
+        reading = await llm_service.generate_tarot_reading(situation, drawn_cards, user_id=user_id)
 
         # Списуємо кредит ТІЛЬКИ після успішної генерації
         await UserRepository.deduct_tarot_credit(user_id)
@@ -165,6 +172,14 @@ async def process_card_pick(callback: CallbackQuery, state: FSMContext, bot: Bot
             "━━━━━━━━━━━━━━━━━━━\n\n"
         )
         final_text = f"{result_header}{reading}\n\n━━━━━━━━━━━━━━━━━━━"
+
+        # Зберігаємо в історію розкладів
+        await UserRepository.add_reading_history(
+            user_id=user_id,
+            reading_type="tarot",
+            title=f"Розклад: {c1.name_ukr}, {c2.name_ukr}, {c3.name_ukr}",
+            content=final_text
+        )
 
         try:
             if msg:
@@ -191,12 +206,13 @@ async def process_card_pick(callback: CallbackQuery, state: FSMContext, bot: Bot
         await state.clear()
     except Exception as e:
         logger.error(f"Помилка створення розкладу Таро: {e}", exc_info=True)
+        # Кредит НЕ списується! Сповіщаємо користувача
+        fail_msg = (
+            "<i>Зараз високе навантаження, не вдалося зчитати карти. "
+            "Спробуй ще раз за хвилину — твій розклад збережено.</i>"
+        )
         if msg:
-            await msg.answer(
-                "<i>Вибач, зв'язок тимчасово перервався. Твій кредит збережено. Спробуй ще раз через хвилину.</i>",
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode="HTML"
-            )
+            await msg.answer(fail_msg, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
         await state.clear()
     finally:
         UserLockManager.release(user_id)

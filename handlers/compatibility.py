@@ -13,7 +13,7 @@ from services.arcana_math import (
     calculate_compatibility_arcana,
     get_arcana_info
 )
-from services.llm import llm_service
+from services.llm import llm_service, LLMServiceError
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.tarot_kb import get_compat_paywall_keyboard
@@ -50,6 +50,7 @@ def parse_name_and_date(text: str, default_name: str = "Ти") -> tuple[str, str
 
 @router.callback_query(F.data == "btn_compatibility")
 async def start_compatibility(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     user_id = callback.from_user.id
     db_user = await UserRepository.get_user(user_id)
 
@@ -115,6 +116,13 @@ async def start_compatibility(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.message(CompatStates.waiting_user_data, ~F.text)
+@router.message(CompatStates.waiting_partner_data, ~F.text)
+async def process_compat_non_text(message: Message):
+    """Обробка нетекстового вводу."""
+    await message.answer("Напиши, будь ласка, текстом — так я зможу точно розібрати твій запит ✨")
+
+
 @router.callback_query(F.data.startswith("compat_use_saved:"))
 async def handle_use_saved_date(callback: CallbackQuery, state: FSMContext):
     date_str = callback.data.split(":", 1)[1]
@@ -160,7 +168,7 @@ async def handle_enter_new_date(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(CompatStates.waiting_user_data)
+@router.message(CompatStates.waiting_user_data, F.text)
 async def process_user_data(message: Message, state: FSMContext):
     text = (message.text or "").strip()
     def_name = message.from_user.first_name or "Ти"
@@ -192,7 +200,7 @@ async def process_user_data(message: Message, state: FSMContext):
     )
 
 
-@router.message(CompatStates.waiting_partner_data)
+@router.message(CompatStates.waiting_partner_data, F.text)
 async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
     text = (message.text or "").strip()
     try:
@@ -240,7 +248,7 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
         p_arcana = get_arcana_info(p_base_num)
         pair_arcana = get_arcana_info(pair_num)
 
-        # Виклик LLM з обробкою таймаутів
+        # Виклик LLM без шаблонних заглушок
         analysis = await llm_service.generate_compatibility(
             user_name=u_name,
             user_birth=u_date_str,
@@ -248,7 +256,8 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             partner_name=p_name,
             partner_birth=p_date_str,
             partner_arcana_name=f"{p_base_num}. {p_arcana['name']}",
-            pair_arcana_name=f"{pair_num}. {pair_arcana['name']}"
+            pair_arcana_name=f"{pair_num}. {pair_arcana['name']}",
+            user_id=user_id
         )
 
         # Списуємо 1 кредит сумісності ТІЛЬКИ після успішного розрахунку
@@ -262,6 +271,15 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             f"✦ Аркан союзу: <b>{pair_num}. {pair_arcana['name']}</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━\n\n"
         )
+        full_response = f"{header}{analysis}"
+
+        # Зберігаємо в історію
+        await UserRepository.add_reading_history(
+            user_id=user_id,
+            reading_type="compat",
+            title=f"Сумісність: {u_name} & {p_name}",
+            content=full_response
+        )
 
         result_kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -270,7 +288,6 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             ]
         )
 
-        full_response = f"{header}{analysis}"
         try:
             await loading_msg.edit_text(
                 text=full_response,
@@ -289,8 +306,13 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
     except Exception as e:
         logger.error(f"Помилка аналізу сумісності: {e}", exc_info=True)
+        # Кредит НЕ списується!
+        fail_msg = (
+            "<i>Зараз високе навантаження, не вдалося розрахувати сумісність. "
+            "Спробуй ще раз за хвилину — твою спробу збережено.</i>"
+        )
         await loading_msg.edit_text(
-            "<i>Вибач, сталася технічна помилка. Твій баланс збережено. Спробуй ще раз за хвилину.</i>",
+            fail_msg,
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )

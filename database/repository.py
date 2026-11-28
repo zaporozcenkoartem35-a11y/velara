@@ -50,6 +50,8 @@ class UserRepository:
                 paid_tarot_credits=row.get("paid_tarot_credits", 0),
                 free_compat_credits=row.get("free_compat_credits", 1),
                 paid_compat_credits=row.get("paid_compat_credits", 0),
+                nudge_sent=row.get("nudge_sent", 0),
+                is_blocked=row.get("is_blocked", 0),
                 first_seen=row.get("first_seen", now),
                 last_seen=now
             )
@@ -67,8 +69,9 @@ class UserRepository:
                 INSERT INTO users (
                     user_id, username, first_name, last_name, birth_date,
                     utm_source, referrer_id, free_tarot_credits, paid_tarot_credits,
-                    free_compat_credits, paid_compat_credits, first_seen, last_seen
-                ) VALUES (?, ?, ?, ?, NULL, ?, ?, 1, 0, 1, 0, ?, ?)
+                    free_compat_credits, paid_compat_credits, nudge_sent, is_blocked,
+                    first_seen, last_seen
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, 1, 0, 1, 0, 0, 0, ?, ?)
                 """,
                 user_id, username, first_name, last_name, clean_source, valid_referrer, now, now
             )
@@ -106,6 +109,8 @@ class UserRepository:
                 paid_tarot_credits=0,
                 free_compat_credits=1,
                 paid_compat_credits=0,
+                nudge_sent=0,
+                is_blocked=0,
                 first_seen=now,
                 last_seen=now
             )
@@ -128,6 +133,8 @@ class UserRepository:
             paid_tarot_credits=row.get("paid_tarot_credits", 0),
             free_compat_credits=row.get("free_compat_credits", 1),
             paid_compat_credits=row.get("paid_compat_credits", 0),
+            nudge_sent=row.get("nudge_sent", 0),
+            is_blocked=row.get("is_blocked", 0),
             first_seen=row.get("first_seen", ""),
             last_seen=row.get("last_seen", "")
         )
@@ -138,9 +145,7 @@ class UserRepository:
 
     @classmethod
     async def deduct_tarot_credit(cls, user_id: int) -> bool:
-        """
-        Списує 1 кредит Таро (спочатку безкоштовний, потім платний).
-        """
+        """Списує 1 кредит Таро (спочатку безкоштовний, потім платний)."""
         row = await db.fetch_one(
             "SELECT free_tarot_credits, paid_tarot_credits FROM users WHERE user_id = ?",
             user_id
@@ -166,9 +171,7 @@ class UserRepository:
 
     @classmethod
     async def deduct_compat_credit(cls, user_id: int) -> bool:
-        """
-        Списує 1 кредит перевірки сумісності (спочатку безкоштовний, потім платний).
-        """
+        """Списує 1 кредит перевірки сумісності (спочатку безкоштовний, потім платний)."""
         row = await db.fetch_one(
             "SELECT free_compat_credits, paid_compat_credits FROM users WHERE user_id = ?",
             user_id
@@ -242,6 +245,192 @@ class UserRepository:
         count = await db.fetch_val("SELECT COUNT(*) FROM users WHERE referrer_id = ?", user_id)
         return {"invited_count": count or 0}
 
+    # --- Кэширование Арканов ---
+    @classmethod
+    async def get_arcana_cache(cls, user_id: int, birth_date: str) -> Optional[Dict[str, Any]]:
+        return await db.fetch_one(
+            "SELECT * FROM arcana_cache WHERE user_id = ? AND birth_date = ?",
+            user_id, birth_date
+        )
+
+    @classmethod
+    async def save_arcana_portrait(cls, user_id: int, birth_date: str, portrait_text: str) -> None:
+        now = cls._now_iso()
+        await db.execute(
+            """
+            INSERT INTO arcana_cache (user_id, birth_date, base_portrait, love_scenario, created_at)
+            VALUES (?, ?, ?, NULL, ?)
+            ON CONFLICT (user_id, birth_date) DO UPDATE SET base_portrait = EXCLUDED.base_portrait
+            """,
+            user_id, birth_date, portrait_text, now
+        )
+
+    @classmethod
+    async def save_arcana_love(cls, user_id: int, birth_date: str, love_scenario: str) -> None:
+        now = cls._now_iso()
+        await db.execute(
+            """
+            INSERT INTO arcana_cache (user_id, birth_date, base_portrait, love_scenario, created_at)
+            VALUES (?, ?, NULL, ?, ?)
+            ON CONFLICT (user_id, birth_date) DO UPDATE SET love_scenario = EXCLUDED.love_scenario
+            """,
+            user_id, birth_date, love_scenario, now
+        )
+
+    # --- История раскладов ---
+    @classmethod
+    async def add_reading_history(cls, user_id: int, reading_type: str, title: str, content: str) -> None:
+        now = cls._now_iso()
+        await db.execute(
+            """
+            INSERT INTO readings_history (user_id, reading_type, title, content, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            user_id, reading_type, title, content, now
+        )
+
+    @classmethod
+    async def get_readings_history(cls, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        return await db.fetch_all(
+            """
+            SELECT id, reading_type, title, content, created_at
+            FROM readings_history
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            user_id, limit
+        )
+
+    @classmethod
+    async def get_reading_by_id(cls, reading_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        return await db.fetch_one(
+            "SELECT * FROM readings_history WHERE id = ? AND user_id = ?",
+            reading_id, user_id
+        )
+
+    # --- Юнит-экономика LLM ---
+    @classmethod
+    async def record_llm_usage(
+        cls,
+        user_id: int,
+        feature: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int
+    ) -> None:
+        now = cls._now_iso()
+        await db.execute(
+            """
+            INSERT INTO llm_usage (user_id, feature, model, prompt_tokens, completion_tokens, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            user_id, feature, model, prompt_tokens, completion_tokens, now
+        )
+
+    @classmethod
+    async def get_llm_usage_stats(cls) -> Dict[str, Any]:
+        since_24h = (datetime.utcnow() - timedelta(days=1)).isoformat()
+        row_24h = await db.fetch_one(
+            """
+            SELECT 
+                COALESCE(SUM(prompt_tokens), 0) as p_tokens,
+                COALESCE(SUM(completion_tokens), 0) as c_tokens,
+                COUNT(*) as req_count
+            FROM llm_usage
+            WHERE created_at >= ?
+            """,
+            since_24h
+        )
+        row_all = await db.fetch_one(
+            """
+            SELECT 
+                COALESCE(SUM(prompt_tokens), 0) as p_tokens,
+                COALESCE(SUM(completion_tokens), 0) as c_tokens,
+                COUNT(*) as req_count
+            FROM llm_usage
+            """
+        )
+        return {
+            "tokens_24h": {
+                "prompt": row_24h["p_tokens"] if row_24h else 0,
+                "completion": row_24h["c_tokens"] if row_24h else 0,
+                "total": (row_24h["p_tokens"] + row_24h["c_tokens"]) if row_24h else 0,
+                "requests": row_24h["req_count"] if row_24h else 0
+            },
+            "tokens_all": {
+                "prompt": row_all["p_tokens"] if row_all else 0,
+                "completion": row_all["c_tokens"] if row_all else 0,
+                "total": (row_all["p_tokens"] + row_all["c_tokens"]) if row_all else 0,
+                "requests": row_all["req_count"] if row_all else 0
+            }
+        }
+
+    # --- Retention Дожим ---
+    @classmethod
+    async def get_users_for_nudge(cls) -> List[Dict[str, Any]]:
+        """
+        Знаходить користувачів для м'якого дожиму:
+        - старт бота від 2 до 24 годин тому;
+        - free_tarot_credits >= 1;
+        - жодного завершеного розкладу Таро;
+        - nudge_sent = 0 та не заблокували бота.
+        """
+        now = datetime.utcnow()
+        since_24h = (now - timedelta(hours=24)).isoformat()
+        since_2h = (now - timedelta(hours=2)).isoformat()
+
+        query = """
+            SELECT u.user_id, u.first_name, u.utm_source
+            FROM users u
+            WHERE u.first_seen >= ? AND u.first_seen <= ?
+              AND u.free_tarot_credits >= 1
+              AND (u.nudge_sent IS NULL OR u.nudge_sent = 0)
+              AND (u.is_blocked IS NULL OR u.is_blocked = 0)
+              AND NOT EXISTS (
+                  SELECT 1 FROM events e WHERE e.user_id = u.user_id AND e.event_name = 'tarot_completed'
+              )
+            LIMIT 50;
+        """
+        return await db.fetch_all(query, since_24h, since_2h)
+
+    @classmethod
+    async def mark_nudge_sent(cls, user_id: int) -> None:
+        await db.execute("UPDATE users SET nudge_sent = 1 WHERE user_id = ?", user_id)
+
+    @classmethod
+    async def mark_user_blocked(cls, user_id: int) -> None:
+        await db.execute("UPDATE users SET is_blocked = 1, nudge_sent = 1 WHERE user_id = ?", user_id)
+
+    # --- Сегменти розсилки (Broadcast) ---
+    @classmethod
+    async def get_broadcast_recipients(cls, segment: str) -> List[int]:
+        if segment == "all":
+            rows = await db.fetch_all(
+                "SELECT user_id FROM users WHERE (is_blocked IS NULL OR is_blocked = 0)"
+            )
+        elif segment == "no_payments":
+            query = """
+                SELECT u.user_id 
+                FROM users u 
+                WHERE (u.is_blocked IS NULL OR u.is_blocked = 0)
+                  AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.user_id)
+            """
+            rows = await db.fetch_all(query)
+        elif segment == "paid":
+            query = """
+                SELECT DISTINCT u.user_id 
+                FROM users u 
+                JOIN payments p ON u.user_id = p.user_id 
+                WHERE (u.is_blocked IS NULL OR u.is_blocked = 0)
+            """
+            rows = await db.fetch_all(query)
+        else:
+            rows = []
+
+        return [r["user_id"] for r in rows]
+
+    # --- Аналітика для /admin ---
     @classmethod
     async def get_admin_metrics(cls) -> Dict[str, Any]:
         """Зведені метрики для панелі керування /admin."""
@@ -284,10 +473,7 @@ class UserRepository:
 
     @classmethod
     async def get_utm_funnel(cls) -> List[Dict[str, Any]]:
-        """
-        Воронка конверсії за UTM-джерелами:
-        джерело -> переходи -> розклад -> клік «Оплатити» -> оплат.
-        """
+        """Воронка конверсії за UTM-джерелами."""
         query = """
             SELECT 
                 u.utm_source,

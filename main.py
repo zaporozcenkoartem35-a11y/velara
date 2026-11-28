@@ -9,8 +9,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import settings
-from database.db import init_db
+from database.db import db, init_db
 from middlewares.throttling import ThrottlingMiddleware
+from services.llm import llm_service
+from services.retention import start_retention_worker
 
 # Роутери
 from handlers.admin import router as admin_router
@@ -29,7 +31,30 @@ logger = logging.getLogger("velara_main")
 
 
 async def healthcheck(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "app": "Velara Bot", "version": "2.0"})
+    """
+    Чесний healthcheck із перевіркою доступності бази даних (SELECT 1).
+    Повертає 200 OK при працездатній БД або 500 при відвалі.
+    """
+    try:
+        val = await db.fetch_val("SELECT 1")
+        if val == 1:
+            return web.json_response({
+                "status": "ok",
+                "app": "Velara Bot",
+                "version": "2.5",
+                "db": "connected"
+            }, status=200)
+        else:
+            raise RuntimeError(f"Неочікуване значення SELECT 1: {val}")
+    except Exception as e:
+        logger.error(f"Healthcheck помилка бази даних: {e}")
+        return web.json_response({
+            "status": "error",
+            "app": "Velara Bot",
+            "version": "2.5",
+            "db": "disconnected",
+            "error": str(e)
+        }, status=500)
 
 
 async def tarot_webapp_page(request: web.Request) -> web.Response:
@@ -47,7 +72,7 @@ async def start_web_server(port: int) -> None:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Healthcheck & WebApp сервер запущено на порту {port}")
+    logger.info(f"Чесний Healthcheck сервер запущено на порту {port}")
 
 
 async def main() -> None:
@@ -60,7 +85,7 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    logger.info("Ініціалізація бази даних...")
+    logger.info("Ініціалізація та міграція бази даних...")
     await init_db()
 
     # Запуск фонового веб-сервера для Render / UptimeRobot
@@ -71,12 +96,15 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Не вдалося запустити локальний веб-сервер на порту {port}: {e}")
 
-    logger.info("Запуск бота Velara...")
+    logger.info("Запуск бота Velara 2.5...")
     bot = Bot(
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Прив'язка екземпляра бота до LLM сервісу для відправки алертів адміну
+    llm_service.set_bot(bot)
 
     # Реєстрація middleware
     throttling = ThrottlingMiddleware()
@@ -97,6 +125,9 @@ async def main() -> None:
     bot_info = await bot.get_me()
     logger.info(f"Бот @{bot_info.username} (ID: {bot_info.id}) успішно авторизований!")
 
+    # Запуск фонової задачі м'якого ретеншн-дожиму (раз на 10 хвилин)
+    asyncio.create_task(start_retention_worker(bot))
+
     # Сповіщаємо адмінів про запуск нової версії
     admin_list = settings.ADMIN_IDS if isinstance(settings.ADMIN_IDS, list) else [settings.ADMIN_IDS]
     for admin_id in admin_list:
@@ -104,9 +135,12 @@ async def main() -> None:
             await bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"🕯 <b>Velara Bot 2.0 активовано!</b>\n\n"
-                    f"Бот: @{bot_info.username}\n"
-                    f"Усі модулі (Таро, Сумісність, Аркани, Stars) активні.\n"
+                    f"🕯 <b>Velara Bot v2.5 Production активовано!</b>\n\n"
+                    f"• Бот: @{bot_info.username}\n"
+                    f"• Healthcheck: <code>SELECT 1</code> активний\n"
+                    f"• Ретеншн-воркер: активний (перевірка кожні 10 хв)\n"
+                    f"• Кэшування Арканів: активне\n"
+                    f"• Юніт-економіка LLM: активна\n\n"
                     f"Використовуй <code>/admin</code> для перегляду аналітики."
                 ),
                 parse_mode="HTML"

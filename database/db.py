@@ -136,6 +136,8 @@ async def init_db() -> None:
                     paid_tarot_credits INTEGER DEFAULT 0,
                     free_compat_credits INTEGER DEFAULT 1,
                     paid_compat_credits INTEGER DEFAULT 0,
+                    nudge_sent INTEGER DEFAULT 0,
+                    is_blocked INTEGER DEFAULT 0,
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL
                 );
@@ -149,6 +151,8 @@ async def init_db() -> None:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_tarot_credits INTEGER DEFAULT 0;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS free_compat_credits INTEGER DEFAULT 1;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_compat_credits INTEGER DEFAULT 0;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nudge_sent INTEGER DEFAULT 0;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked INTEGER DEFAULT 0;")
 
             # 2. Таблиця подій воронки
             await conn.execute("""
@@ -192,10 +196,49 @@ async def init_db() -> None:
                 );
             """)
 
+            # 6. Кэш розрахованих Арканів (базовий та любовний)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS arcana_cache (
+                    user_id BIGINT NOT NULL,
+                    birth_date TEXT NOT NULL,
+                    base_portrait TEXT,
+                    love_scenario TEXT,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, birth_date)
+                );
+            """)
+
+            # 7. Історія успішних розкладів
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS readings_history (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    reading_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
+            # 8. Використання токенів LLM (юніт-економіка)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    feature TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
             # Індекси
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_utm ON users(utm_source);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_readings_user ON readings_history(user_id, id DESC);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);")
 
         logger.info("PostgreSQL база даних успішно підключена та мігрована.")
     else:
@@ -253,6 +296,8 @@ async def init_db() -> None:
                     paid_tarot_credits INTEGER DEFAULT 0,
                     free_compat_credits INTEGER DEFAULT 1,
                     paid_compat_credits INTEGER DEFAULT 0,
+                    nudge_sent INTEGER DEFAULT 0,
+                    is_blocked INTEGER DEFAULT 0,
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL
                 );
@@ -278,6 +323,10 @@ async def init_db() -> None:
                 await conn.execute("ALTER TABLE users ADD COLUMN free_compat_credits INTEGER DEFAULT 1;")
             if "paid_compat_credits" not in u_cols:
                 await conn.execute("ALTER TABLE users ADD COLUMN paid_compat_credits INTEGER DEFAULT 0;")
+            if "nudge_sent" not in u_cols:
+                await conn.execute("ALTER TABLE users ADD COLUMN nudge_sent INTEGER DEFAULT 0;")
+            if "is_blocked" not in u_cols:
+                await conn.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0;")
 
             # 3. Сумісність (legacy)
             await conn.execute("""
@@ -310,10 +359,49 @@ async def init_db() -> None:
                 );
             """)
 
+            # 6. Кэш розрахованих Арканів
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS arcana_cache (
+                    user_id INTEGER NOT NULL,
+                    birth_date TEXT NOT NULL,
+                    base_portrait TEXT,
+                    love_scenario TEXT,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, birth_date)
+                );
+            """)
+
+            # 7. Історія успішних розкладів
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS readings_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    reading_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
+            # 8. Юніт-економіка LLM
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    feature TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL,
+                    completion_tokens INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
             # Індекси
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_utm ON users(utm_source);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_readings_user ON readings_history(user_id, id DESC);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);")
 
             await conn.commit()
             logger.info("SQLite база даних успішно ініціалізована та мігрована.")

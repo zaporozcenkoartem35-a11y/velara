@@ -37,6 +37,9 @@ def get_profile_keyboard(referral_link: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💌 Поділитися з подругою (+1 бонус)", url=share_url)
             ],
             [
+                InlineKeyboardButton(text="📜 Мої розклади", callback_data="btn_history")
+            ],
+            [
                 InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")
             ]
         ]

@@ -1,21 +1,30 @@
+import re
 import html
+import logging
 from aiogram import Router, Bot, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from database.repository import UserRepository
 from keyboards.menu import get_main_menu_keyboard, get_profile_keyboard
 
+logger = logging.getLogger("handlers.start")
 router = Router(name="start_router")
 
 
 @router.message(CommandStart())
-async def handle_start(message: Message, command: CommandObject, bot: Bot, state: FSMContext):
+@router.message(Command("menu"))
+async def handle_start(message: Message, bot: Bot, state: FSMContext, command: CommandObject = None):
+    # Глобальний скид будь-якого стану FSM
     await state.clear()
     user = message.from_user
 
-    # Розбираємо deep-link payload
-    payload = (command.args or "").strip()
+    # Розбираємо deep-link payload якщо є
+    payload = ""
+    if command and command.args:
+        payload = command.args.strip()
+
     referrer_id = None
     utm_source = "direct"
 
@@ -90,7 +99,8 @@ async def handle_back_to_menu(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "btn_profile")
-async def handle_profile(callback: CallbackQuery, bot: Bot):
+async def handle_profile(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    await state.clear()
     user_id = callback.from_user.id
     db_user = await UserRepository.get_user(user_id)
     if not db_user:
@@ -120,4 +130,81 @@ async def handle_profile(callback: CallbackQuery, bot: Bot):
             reply_markup=get_profile_keyboard(ref_link),
             parse_mode="HTML"
         )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "btn_history")
+async def handle_history_list(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user_id = callback.from_user.id
+    readings = await UserRepository.get_readings_history(user_id, limit=5)
+
+    if not readings:
+        empty_text = (
+            "📜 <b>Твоя історія розкладів</b>\n\n"
+            "Тут зберігатимуться твої розклади Таро та перевірки сумісності, "
+            "щоб ти завжди могла повернутися до них та перечитати інсайти.\n\n"
+            "<i>У тебе поки немає збережених розкладів.</i>"
+        )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« До профілю", callback_data="btn_profile")]
+            ]
+        )
+        if callback.message:
+            await callback.message.edit_text(empty_text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    hist_text = (
+        "📜 <b>Твої останні розклади</b>\n\n"
+        "Натисни на розклад, щоб переглянути його повний текст:"
+    )
+    kb_rows = []
+    for r in readings:
+        icon = "🌙" if r["reading_type"] == "tarot" else "✨"
+        dt = r["created_at"][:10]  # РРРР-ММ-ДД
+        clean_title = r["title"].replace("Розклад: ", "").replace("Сумісність: ", "")[:20]
+        label = f"{icon} {clean_title}... ({dt})"
+        kb_rows.append([
+            InlineKeyboardButton(text=label, callback_data=f"read_hist:{r['id']}")
+        ])
+    kb_rows.append([InlineKeyboardButton(text="« До профілю", callback_data="btn_profile")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    if callback.message:
+        await callback.message.edit_text(hist_text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("read_hist:"))
+async def handle_show_history_item(callback: CallbackQuery):
+    try:
+        reading_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("Помилка ідентифікатора", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    item = await UserRepository.get_reading_by_id(reading_id, user_id)
+    if not item:
+        await callback.answer("Запис не знайдено", show_alert=True)
+        return
+
+    content = item["content"]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="« До списку розкладів", callback_data="btn_history")],
+            [InlineKeyboardButton(text="« До меню", callback_data="back_to_menu")]
+        ]
+    )
+
+    if callback.message:
+        try:
+            await callback.message.edit_text(content, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest as te:
+            logger.warning(f"HTML parse error in history: {te}. Sending plain text.")
+            plain_text = re.sub(r"<[^>]+>", "", content)
+            await callback.message.edit_text(plain_text, reply_markup=kb, parse_mode=None)
+
     await callback.answer()
