@@ -6,4 +6,5 @@ __pycache__/
 *.sqlite
 *.sqlite3
 leads.csv
+tmp_preview/
 .DS_Store
