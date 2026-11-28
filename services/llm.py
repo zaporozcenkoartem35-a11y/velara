@@ -120,18 +120,43 @@ class LLMService:
             raise LLMServiceError(err_msg)
 
         last_exception = None
+        is_new_gen = any(k in settings.LLM_MODEL.lower() for k in ["terra", "o1", "o3", "gpt-5", "gpt-6"])
+
         for attempt in range(2):
             try:
-                response = await self._client.chat.completions.create(
-                    model=settings.LLM_MODEL,
-                    messages=[
+                call_kwargs = {
+                    "model": settings.LLM_MODEL,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=settings.LLM_TEMPERATURE,
-                    max_tokens=settings.LLM_MAX_TOKENS,
-                    timeout=settings.LLM_TIMEOUT_SECONDS
-                )
+                    "timeout": settings.LLM_TIMEOUT_SECONDS
+                }
+                if is_new_gen:
+                    call_kwargs["max_completion_tokens"] = settings.LLM_MAX_TOKENS
+                else:
+                    call_kwargs["max_tokens"] = settings.LLM_MAX_TOKENS
+                    call_kwargs["temperature"] = settings.LLM_TEMPERATURE
+
+                for _ in range(3):
+                    try:
+                        response = await self._client.chat.completions.create(**call_kwargs)
+                        break
+                    except Exception as api_err:
+                        err_text = str(api_err).lower()
+                        modified = False
+                        if "max_completion_tokens" in err_text and "max_tokens" in call_kwargs:
+                            logger.info(f"Модель {settings.LLM_MODEL} вимагає max_completion_tokens замість max_tokens")
+                            call_kwargs.pop("max_tokens", None)
+                            call_kwargs["max_completion_tokens"] = settings.LLM_MAX_TOKENS
+                            modified = True
+                        if "temperature" in err_text and "temperature" in call_kwargs:
+                            logger.info(f"Модель {settings.LLM_MODEL} не підтримує temperature, прибираємо")
+                            call_kwargs.pop("temperature", None)
+                            modified = True
+                        if not modified:
+                            raise api_err
+
                 raw_text = response.choices[0].message.content or ""
                 clean_text = sanitize_telegram_html(raw_text)
                 if not clean_text:
