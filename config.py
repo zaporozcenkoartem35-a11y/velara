@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_TEMPERATURE: float = 0.72
-    LLM_MAX_TOKENS: int = 650
+    LLM_MAX_TOKENS: int = 1100
     LLM_TIMEOUT_SECONDS: float = 30.0
 
     # Ціни в Telegram Stars (XTR)

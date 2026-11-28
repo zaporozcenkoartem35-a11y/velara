@@ -1,28 +1,59 @@
 import re
 import os
+import urllib.parse
+import asyncio
 import logging
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Optional, Dict, Tuple
 import aiosqlite
 from config import settings
 
 logger = logging.getLogger("database")
 
 
-def normalize_pg_url(url: str) -> str:
+def clean_postgres_dsn(raw_url: str) -> Tuple[str, bool]:
     """
-    Забезпечує коректний префікс URL для asyncpg:
-    перетворює postgres:// або postgresql+asyncpg:// на postgresql://
+    Очищує та адаптує DSN для asyncpg (сумісність із Neon.tech / Render):
+    - Нормалізує префікс до postgresql://
+    - Видаляє libpq-специфічні query-параметри на кшталт channel_binding
+    - Визначає необхідність SSL (для Neon.tech завжди обов'язковий)
     """
-    if not url:
-        return ""
-    return re.sub(r"^(postgres|postgresql\+[a-zA-Z0-9_-]+)://", "postgresql://", url.strip())
+    if not raw_url:
+        return "", False
+
+    clean_url = re.sub(r"^(postgres|postgresql\+[a-zA-Z0-9_-]+)://", "postgresql://", raw_url.strip())
+    parsed = urllib.parse.urlsplit(clean_url)
+
+    query_params = urllib.parse.parse_qs(parsed.query)
+
+    # Видаляємо channel_binding та несумісні для asyncpg параметри
+    query_params.pop("channel_binding", None)
+    query_params.pop("gssencmode", None)
+
+    # Визначаємо SSL режим
+    sslmode = query_params.pop("sslmode", [""])[0].lower()
+    needs_ssl = (
+        sslmode in ("require", "verify-ca", "verify-full")
+        or "neon.tech" in parsed.netloc.lower()
+        or "supabase.co" in parsed.netloc.lower()
+    )
+    query_params.pop("ssl", None)
+
+    # Збираємо чистий DSN
+    new_query = urllib.parse.urlencode({k: v[0] for k, v in query_params.items()})
+    final_dsn = urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        new_query,
+        parsed.fragment
+    ))
+    return final_dsn, needs_ssl
 
 
 class DatabaseAdapter:
     def __init__(self):
         self._raw_url = (settings.DATABASE_URL or "").strip()
         self._is_postgres = bool(self._raw_url)
-        self._pg_url = normalize_pg_url(self._raw_url) if self._is_postgres else ""
         self._sqlite_path = settings.DATABASE_PATH
         self._pool = None
 
@@ -31,34 +62,64 @@ class DatabaseAdapter:
         return self._is_postgres
 
     async def get_pool(self):
-        if self._is_postgres and self._pool is None:
-            import asyncpg
-            logger.info("Підключення до PostgreSQL пулу через asyncpg...")
-            self._pool = await asyncpg.create_pool(dsn=self._pg_url, min_size=1, max_size=10)
+        if self._is_postgres:
+            if self._pool is None or getattr(self._pool, "_closed", False) or getattr(self._pool, "_closing", False):
+                import asyncpg
+                dsn, needs_ssl = clean_postgres_dsn(self._raw_url)
+                logger.info("Підключення до PostgreSQL пулу через asyncpg (Neon.tech / Cloud)...")
+                
+                pool_kwargs: Dict[str, Any] = {
+                    "dsn": dsn,
+                    "min_size": 1,
+                    "max_size": 5,
+                    "max_inactive_connection_lifetime": 60.0,
+                    "command_timeout": 30.0
+                }
+                if needs_ssl:
+                    pool_kwargs["ssl"] = "require"
+
+                self._pool = await asyncpg.create_pool(**pool_kwargs)
         return self._pool
 
     def translate_query(self, query: str) -> str:
         """
         Перетворює плейсхолдери '?' на '$1', '$2', ... для asyncpg (PostgreSQL).
+        Безпечно ігнорує знаки '?' усередині рядкових літералів '...'.
         """
         if not self._is_postgres:
             return query
-        parts = query.split("?")
-        if len(parts) <= 1:
-            return query
-        new_parts = []
-        for i, part in enumerate(parts[:-1]):
-            new_parts.append(part)
-            new_parts.append(f"${i + 1}")
-        new_parts.append(parts[-1])
-        return "".join(new_parts)
+
+        out = []
+        param_idx = 1
+        in_single_quotes = False
+        for ch in query:
+            if ch == "'":
+                in_single_quotes = not in_single_quotes
+                out.append(ch)
+            elif ch == "?" and not in_single_quotes:
+                out.append(f"${param_idx}")
+                param_idx += 1
+            else:
+                out.append(ch)
+        return "".join(out)
 
     async def execute(self, query: str, *args) -> None:
         if self._is_postgres:
-            pool = await self.get_pool()
-            async with pool.acquire() as conn:
-                q = self.translate_query(query)
-                await conn.execute(q, *args)
+            q = self.translate_query(query)
+            for attempt in range(2):
+                try:
+                    pool = await self.get_pool()
+                    async with pool.acquire() as conn:
+                        await conn.execute(q, *args)
+                    return
+                except Exception as conn_err:
+                    err_name = conn_err.__class__.__name__
+                    if attempt == 0 and ("Connection" in err_name or "Reset" in err_name or "Pipe" in err_name):
+                        logger.warning(f"PostgreSQL з'єднання перервано ({err_name}). Відновлення пулу...")
+                        self._pool = None
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
         else:
             async with aiosqlite.connect(self._sqlite_path) as conn:
                 await conn.execute(query, args)
@@ -66,11 +127,21 @@ class DatabaseAdapter:
 
     async def fetch_one(self, query: str, *args) -> Optional[Dict[str, Any]]:
         if self._is_postgres:
-            pool = await self.get_pool()
-            async with pool.acquire() as conn:
-                q = self.translate_query(query)
-                row = await conn.fetchrow(q, *args)
-                return dict(row) if row else None
+            q = self.translate_query(query)
+            for attempt in range(2):
+                try:
+                    pool = await self.get_pool()
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow(q, *args)
+                        return dict(row) if row else None
+                except Exception as conn_err:
+                    err_name = conn_err.__class__.__name__
+                    if attempt == 0 and ("Connection" in err_name or "Reset" in err_name or "Pipe" in err_name):
+                        logger.warning(f"PostgreSQL з'єднання перервано ({err_name}). Відновлення пулу...")
+                        self._pool = None
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
         else:
             async with aiosqlite.connect(self._sqlite_path) as conn:
                 conn.row_factory = aiosqlite.Row
@@ -80,11 +151,21 @@ class DatabaseAdapter:
 
     async def fetch_all(self, query: str, *args) -> List[Dict[str, Any]]:
         if self._is_postgres:
-            pool = await self.get_pool()
-            async with pool.acquire() as conn:
-                q = self.translate_query(query)
-                rows = await conn.fetch(q, *args)
-                return [dict(r) for r in rows]
+            q = self.translate_query(query)
+            for attempt in range(2):
+                try:
+                    pool = await self.get_pool()
+                    async with pool.acquire() as conn:
+                        rows = await conn.fetch(q, *args)
+                        return [dict(r) for r in rows]
+                except Exception as conn_err:
+                    err_name = conn_err.__class__.__name__
+                    if attempt == 0 and ("Connection" in err_name or "Reset" in err_name or "Pipe" in err_name):
+                        logger.warning(f"PostgreSQL з'єднання перервано ({err_name}). Відновлення пулу...")
+                        self._pool = None
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
         else:
             async with aiosqlite.connect(self._sqlite_path) as conn:
                 conn.row_factory = aiosqlite.Row
@@ -94,10 +175,20 @@ class DatabaseAdapter:
 
     async def fetch_val(self, query: str, *args) -> Any:
         if self._is_postgres:
-            pool = await self.get_pool()
-            async with pool.acquire() as conn:
-                q = self.translate_query(query)
-                return await conn.fetchval(q, *args)
+            q = self.translate_query(query)
+            for attempt in range(2):
+                try:
+                    pool = await self.get_pool()
+                    async with pool.acquire() as conn:
+                        return await conn.fetchval(q, *args)
+                except Exception as conn_err:
+                    err_name = conn_err.__class__.__name__
+                    if attempt == 0 and ("Connection" in err_name or "Reset" in err_name or "Pipe" in err_name):
+                        logger.warning(f"PostgreSQL з'єднання перервано ({err_name}). Відновлення пулу...")
+                        self._pool = None
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
         else:
             async with aiosqlite.connect(self._sqlite_path) as conn:
                 async with conn.execute(query, args) as cur:
@@ -115,7 +206,7 @@ db = DatabaseAdapter()
 
 async def init_db() -> None:
     """
-    Ініціалізація та міграція схеми для PostgreSQL (Render / Cloud)
+    Ініціалізація та міграція схеми для PostgreSQL (Neon.tech / Render / Cloud)
     або SQLite (локальний fallback).
     """
     if db.is_postgres:
