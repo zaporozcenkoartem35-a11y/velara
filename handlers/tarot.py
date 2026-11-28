@@ -2,7 +2,7 @@ import re
 import asyncio
 import logging
 from aiogram import Router, Bot, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ChatAction
@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from database.repository import UserRepository
 from services.tarot_deck import deck
 from services.llm import llm_service, LLMServiceError
+from services.image_renderer import render_tarot_spread
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.tarot_kb import (
@@ -17,6 +18,7 @@ from keyboards.tarot_kb import (
     get_tarot_paywall_keyboard,
     get_after_tarot_keyboard
 )
+from config import settings
 
 logger = logging.getLogger("handlers.tarot")
 router = Router(name="tarot_router")
@@ -174,15 +176,35 @@ async def process_card_pick(callback: CallbackQuery, state: FSMContext, bot: Bot
         final_text = f"{result_header}{reading}\n\n━━━━━━━━━━━━━━━━━━━"
 
         # Зберігаємо в історію розкладів
+        card1_name = getattr(c1, "name_ua", getattr(c1, "name_ukr", "Карта 1"))
+        card2_name = getattr(c2, "name_ua", getattr(c2, "name_ukr", "Карта 2"))
+        card3_name = getattr(c3, "name_ua", getattr(c3, "name_ukr", "Карта 3"))
         await UserRepository.add_reading_history(
             user_id=user_id,
             reading_type="tarot",
-            title=f"Розклад: {c1.name_ukr}, {c2.name_ukr}, {c3.name_ukr}",
+            title=f"Розклад: {card1_name}, {card2_name}, {card3_name}",
             content=final_text
         )
 
+        # Динамічна візуалізація через Pillow
+        photo_sent = False
+        if not settings.DISABLE_IMAGES:
+            try:
+                photo_bytes = render_tarot_spread(drawn_cards)
+                photo_file = BufferedInputFile(photo_bytes, filename="spread.jpg")
+                caption = f"✦ Твій розклад: {card1_name} • {card2_name} • {card3_name}"
+                if msg:
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                await bot.send_photo(chat_id=user_id, photo=photo_file, caption=caption)
+                photo_sent = True
+            except Exception as ie:
+                logger.error(f"Помилка генерації або відправки зображення Таро: {ie}", exc_info=True)
+
         try:
-            if msg:
+            if msg and not photo_sent:
                 await msg.edit_text(
                     text=final_text,
                     reply_markup=get_after_tarot_keyboard(),
@@ -198,7 +220,7 @@ async def process_card_pick(callback: CallbackQuery, state: FSMContext, bot: Bot
         except TelegramBadRequest as te:
             logger.warning(f"TelegramBadRequest під час відправки Таро: {te}. Фоллбек на простий текст.")
             plain_text = re.sub(r"<[^>]+>", "", final_text)
-            if msg:
+            if msg and not photo_sent:
                 await msg.edit_text(text=plain_text, reply_markup=get_after_tarot_keyboard(), parse_mode=None)
             else:
                 await bot.send_message(chat_id=user_id, text=plain_text, reply_markup=get_after_tarot_keyboard(), parse_mode=None)

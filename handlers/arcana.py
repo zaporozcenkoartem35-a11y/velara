@@ -2,7 +2,7 @@ import re
 import logging
 from datetime import datetime
 from aiogram import Router, Bot, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ChatAction
@@ -14,9 +14,11 @@ from services.arcana_math import (
     get_arcana_info
 )
 from services.llm import llm_service, LLMServiceError
+from services.image_renderer import render_personal_arcana
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.payment_kb import get_arcana_upsell_keyboard
+from config import settings
 
 logger = logging.getLogger("handlers.arcana")
 router = Router(name="arcana_router")
@@ -142,16 +144,41 @@ async def generate_and_show_arcana(message_obj: Message, user_id: int, birth_dat
         else:
             kb = get_arcana_upsell_keyboard()
 
-        target_msg = loading if loading else message_obj
+        # Динамічна візуалізація через Pillow
+        photo_sent = False
+        if not settings.DISABLE_IMAGES:
+            try:
+                db_u = await UserRepository.get_user(user_id)
+                user_name = (db_u.username if db_u and db_u.username else None) or (message_obj.from_user.first_name if message_obj.from_user else "Ти")
+                photo_bytes = render_personal_arcana(
+                    name=user_name,
+                    birth_date=birth_date,
+                    arc_num=base_num,
+                    arc_name=base_info["name"],
+                    arc_type="Аркан особистості"
+                )
+                photo_file = BufferedInputFile(photo_bytes, filename="personal_arcana.jpg")
+                caption = f"✦ Твій Аркан долі: {base_num}. {base_info['name']}"
+                if loading:
+                    try:
+                        await loading.delete()
+                    except Exception:
+                        pass
+                await message_obj.answer_photo(photo_file, caption=caption)
+                photo_sent = True
+            except Exception as ie:
+                logger.error(f"Помилка генерації або відправки зображення Аркана: {ie}", exc_info=True)
+
+        target_msg = loading if (loading and not photo_sent) else message_obj
         try:
-            if loading:
+            if loading and not photo_sent:
                 await target_msg.edit_text(text=final_text, reply_markup=kb, parse_mode="HTML")
             else:
                 await target_msg.answer(text=final_text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest as te:
             logger.warning(f"TelegramBadRequest у показі Аркана: {te}. Відправка простим текстом.")
             plain_text = re.sub(r"<[^>]+>", "", final_text)
-            if loading:
+            if loading and not photo_sent:
                 await target_msg.edit_text(text=plain_text, reply_markup=kb, parse_mode=None)
             else:
                 await target_msg.answer(text=plain_text, reply_markup=kb, parse_mode=None)

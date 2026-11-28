@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # WebApp та Сервер
     ENABLE_WEBAPP: bool = False
+    DISABLE_IMAGES: bool = False
     PORT: int = 10000
 
     @field_validator("ADMIN_IDS", mode="before")

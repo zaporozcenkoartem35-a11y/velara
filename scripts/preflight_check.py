@@ -28,6 +28,7 @@ from prompts.tarot_prompt import TAROT_SYSTEM_PROMPT, build_tarot_user_prompt
 from prompts.compatibility_prompt import COMPATIBILITY_SYSTEM_PROMPT, build_compatibility_user_prompt
 from prompts.arcana_prompt import ARCANA_FREE_SYSTEM_PROMPT, build_arcana_free_user_prompt
 from services.arcana_math import calculate_base_arcana, calculate_soul_arcana, calculate_compatibility_arcana, get_arcana_info
+from services.image_renderer import render_tarot_spread, render_compatibility, render_personal_arcana
 
 
 def print_header(title: str):
@@ -198,8 +199,47 @@ async def run_database_preflight() -> bool:
     return True
 
 
+def run_image_rendering_preflight() -> bool:
+    print_header("ЧАСТИНА 2: ДИНАМІЧНА ВІЗУАЛІЗАЦІЯ PILLOW (16:9 ТА 2:3 КАРТКИ)")
+    all_ok = True
+
+    # 1. Tarot spread
+    print_step("1. Рендеринг трикарткового розкладу Таро (1200x675)")
+    try:
+        t_cards = [
+            {"id": "major_1", "name_ua": "Маг", "is_reversed": False},
+            {"id": "major_16", "name_ua": "Вежа", "is_reversed": True},
+            {"id": "major_17", "name_ua": "Зірка", "is_reversed": False}
+        ]
+        b1 = render_tarot_spread(t_cards)
+        print(f"    [OK] Tarot image rendered ({len(b1)} bytes)")
+    except Exception as e:
+        print(f"    ✗ Помилка рендеру Таро: {e}")
+        all_ok = False
+
+    # 2. Compatibility card
+    print_step("2. Рендеринг картки сумісності пари (1200x675)")
+    try:
+        b2 = render_compatibility("Оля", "Максим", "18.06.1999", "05.11.1996", 6, "Закохані")
+        print(f"    [OK] Compatibility image rendered ({len(b2)} bytes)")
+    except Exception as e:
+        print(f"    ✗ Помилка рендеру сумісності: {e}")
+        all_ok = False
+
+    # 3. Personal Arcana card
+    print_step("3. Рендеринг картки персонального Аркана (720x1080)")
+    try:
+        b3 = render_personal_arcana("Оля", "14.08.1998", 14, "Помірність", "Аркан особистості")
+        print(f"    [OK] Personal Arcana image rendered ({len(b3)} bytes)")
+    except Exception as e:
+        print(f"    ✗ Помилка рендеру Аркана: {e}")
+        all_ok = False
+
+    return all_ok
+
+
 async def run_llm_preflight() -> bool:
-    print_header("ЧАСТИНА 2: ЖИВА ПЕРЕВІРКА LLM API ТА ЯКОСТІ ТЕКСТІВ")
+    print_header("ЧАСТИНА 3: ЖИВА ПЕРЕВІРКА LLM API ТА ЯКОСТІ ТЕКСТІВ")
 
     if not settings.LLM_API_KEY or settings.LLM_API_KEY.strip() in ("SET_YOUR_KEY_HERE", "", "your_openai_or_openrouter_key_here"):
         print("\n[!] ПОПЕРЕДЖЕННЯ: LLM_API_KEY не налаштовано в .env.")
@@ -221,6 +261,12 @@ async def run_llm_preflight() -> bool:
             "name": "1. Розклад Таро на стосунки",
             "type": "tarot",
             "system": TAROT_SYSTEM_PROMPT,
+            "render_img": lambda: render_tarot_spread([
+                {"id": "major_2", "name_ua": "2 Мечів", "is_reversed": False},
+                {"id": "major_18", "name_ua": "Місяць", "is_reversed": False},
+                {"id": "major_11", "name_ua": "Королева Жезлів", "is_reversed": False}
+            ]),
+            "img_ok_label": "Tarot image rendered",
             "build_user": lambda: (
                 build_tarot_user_prompt(
                     "Він пропав на три дні після класного побачення, хоча до цього писав постійно. Що відбувається і чи писати йому першій?",
@@ -232,6 +278,15 @@ async def run_llm_preflight() -> bool:
             "name": "2. Сумісність пари за Арканами",
             "type": "compatibility",
             "system": COMPATIBILITY_SYSTEM_PROMPT,
+            "render_img": lambda: render_compatibility(
+                name1="Оля",
+                name2="Максим",
+                date1="18.06.1999",
+                date2="05.11.1996",
+                result_num=1,
+                result_name="Маг"
+            ),
+            "img_ok_label": "Compatibility image rendered",
             "build_user": lambda: (
                 build_compatibility_user_prompt(
                     user_name="Оля",
@@ -248,6 +303,14 @@ async def run_llm_preflight() -> bool:
             "name": "3. Базовий Аркан долі за датою народження",
             "type": "arcana",
             "system": ARCANA_FREE_SYSTEM_PROMPT,
+            "render_img": lambda: render_personal_arcana(
+                name="Оля",
+                birth_date="14.08.1998",
+                arc_num=14,
+                arc_name="Помірність",
+                arc_type="Аркан особистості"
+            ),
+            "img_ok_label": "Personal Arcana image rendered",
             "build_user": lambda: (
                 build_arcana_free_user_prompt(
                     birth_date="14.08.1998",
@@ -260,7 +323,17 @@ async def run_llm_preflight() -> bool:
 
     all_passed = True
     for sc in scenarios:
-        print_step(f"Генерація: {sc['name']}")
+        print_step(f"Тестування: {sc['name']}")
+
+        # Перевірка динамічної візуалізації Pillow
+        if "render_img" in sc:
+            try:
+                img_bytes = sc["render_img"]()
+                print(f"    [OK] {sc['img_ok_label']} ({len(img_bytes)} bytes)")
+            except Exception as e:
+                print(f"    [!] Помилка генерації зображення {sc['name']}: {e}")
+                all_passed = False
+
         user_prompt = sc["build_user"]()
 
         t_start = time.time()
@@ -325,13 +398,15 @@ async def main():
     print(f"Версія Python: {sys.version.split()[0]}")
 
     db_ok = await run_database_preflight()
+    img_ok = run_image_rendering_preflight()
     llm_ok = await run_llm_preflight()
 
     print_header("ПІДСУМОК ПЕРЕДПОЛЬОТНОЇ ПЕРЕВІРКИ")
-    print(f"1. База даних та SQL-сумісність: {'[УСПІШНО PASSED]' if db_ok else '[ПОМИЛКА FAILED]'}")
-    print(f"2. LLM API та якість відповідей: {'[УСПІШНО PASSED]' if llm_ok else '[ПОМИЛКА FAILED]'}")
+    print(f"1. База даних та SQL-сумісність:   {'[УСПІШНО PASSED]' if db_ok else '[ПОМИЛКА FAILED]'}")
+    print(f"2. Візуалізація Pillow (графіка):  {'[УСПІШНО PASSED]' if img_ok else '[ПОМИЛКА FAILED]'}")
+    print(f"3. LLM API та якість відповідей:   {'[УСПІШНО PASSED]' if llm_ok else '[ПОМИЛКА FAILED]'}")
 
-    if db_ok and llm_ok:
+    if db_ok and img_ok and llm_ok:
         print("\n🚀 БОТ ПОВНІСТЮ ГОТОВИЙ ДО БОЙОВОГО ДЕПЛОЮ ТА ТРАФІКУ!")
         sys.exit(0)
     else:

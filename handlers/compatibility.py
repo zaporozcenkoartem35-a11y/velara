@@ -2,7 +2,7 @@ import re
 import logging
 from datetime import datetime
 from aiogram import Router, Bot, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.enums import ChatAction
@@ -14,6 +14,7 @@ from services.arcana_math import (
     get_arcana_info
 )
 from services.llm import llm_service, LLMServiceError
+from services.image_renderer import render_compatibility
 from middlewares.throttling import UserLockManager
 from keyboards.menu import get_cancel_keyboard, get_main_menu_keyboard
 from keyboards.tarot_kb import get_compat_paywall_keyboard
@@ -288,20 +289,59 @@ async def process_partner_data(message: Message, state: FSMContext, bot: Bot):
             ]
         )
 
-        try:
-            await loading_msg.edit_text(
-                text=full_response,
-                reply_markup=result_kb,
-                parse_mode="HTML"
-            )
-        except TelegramBadRequest as te:
-            logger.warning(f"TelegramBadRequest під час відправки HTML сумісності: {te}. Відправка простим текстом.")
-            plain_text = re.sub(r"<[^>]+>", "", full_response)
-            await loading_msg.edit_text(
-                text=plain_text,
-                reply_markup=result_kb,
-                parse_mode=None
-            )
+        # Динамічна візуалізація через Pillow
+        photo_sent = False
+        if not settings.DISABLE_IMAGES:
+            try:
+                photo_bytes = render_compatibility(
+                    name1=u_name,
+                    name2=p_name,
+                    date1=u_date_str,
+                    date2=p_date_str,
+                    result_num=pair_num,
+                    result_name=pair_arcana["name"]
+                )
+                photo_file = BufferedInputFile(photo_bytes, filename="compatibility.jpg")
+                caption = f"✦ Сумісність: {u_name} & {p_name} ✦ Аркан союзу: {pair_num}. {pair_arcana['name']}"
+                await message.answer_photo(photo_file, caption=caption)
+                try:
+                    await loading_msg.delete()
+                except Exception:
+                    pass
+                photo_sent = True
+            except Exception as ie:
+                logger.error(f"Помилка генерації або відправки зображення сумісності: {ie}", exc_info=True)
+
+        if photo_sent:
+            try:
+                await message.answer(
+                    text=full_response,
+                    reply_markup=result_kb,
+                    parse_mode="HTML"
+                )
+            except TelegramBadRequest as te:
+                logger.warning(f"TelegramBadRequest під час відправки HTML сумісності: {te}. Відправка простим текстом.")
+                plain_text = re.sub(r"<[^>]+>", "", full_response)
+                await message.answer(
+                    text=plain_text,
+                    reply_markup=result_kb,
+                    parse_mode=None
+                )
+        else:
+            try:
+                await loading_msg.edit_text(
+                    text=full_response,
+                    reply_markup=result_kb,
+                    parse_mode="HTML"
+                )
+            except TelegramBadRequest as te:
+                logger.warning(f"TelegramBadRequest під час відправки HTML сумісності: {te}. Відправка простим текстом.")
+                plain_text = re.sub(r"<[^>]+>", "", full_response)
+                await loading_msg.edit_text(
+                    text=plain_text,
+                    reply_markup=result_kb,
+                    parse_mode=None
+                )
 
         await state.clear()
     except Exception as e:
